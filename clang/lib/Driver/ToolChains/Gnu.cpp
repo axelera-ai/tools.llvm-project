@@ -1854,7 +1854,7 @@ static void findRISCVBareMetalMultilibs(const Driver &D,
   constexpr RiscvMultilib RISCVMultilibSet[] = {
       {"rv32i", "ilp32"},     {"rv32im", "ilp32"},     {"rv32iac", "ilp32"},
       {"rv32imac", "ilp32"},  {"rv32imafc", "ilp32f"}, {"rv64imac", "lp64"},
-      {"rv64imafdc", "lp64d"}};
+      {"rv64imafc_zicsr", "lp64f"}, {"rv64imafdc_zicsr", "lp64d"}};
 
   std::vector<MultilibBuilder> Ms;
   for (auto Element : RISCVMultilibSet) {
