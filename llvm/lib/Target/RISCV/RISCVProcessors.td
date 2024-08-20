@@ -348,3 +348,17 @@ def XIANGSHAN_NANHU : RISCVProcessorModel<"xiangshan-nanhu",
                                            FeatureStdExtSvinval,
                                            FeatureStdExtZicbom,
                                            FeatureStdExtZicboz]>;
+
+def AXELERA_CVA6V : RISCVProcessorModel<"axelera-cva6v",
+                                        CVA6VModel,
+                                        [Feature64Bit,
+                                         FeatureStdExtZicsr,
+                                         FeatureStdExtZifencei,
+                                         FeatureStdExtM,
+                                         FeatureStdExtA,
+                                         FeatureStdExtF,
+                                         FeatureStdExtC,
+                                         FeatureStdExtZve32f,
+                                         FeatureStdExtZvl4096b,
+                                         FeatureStdExtZfh,
+                                         FeatureStdExtZvfh]>;
