@@ -87,11 +87,32 @@ class CVA6VGetLMulCyclesELEM<string mx, int sew> {
   );
 }
 
-defvar CVA6VLatencyVLSU    = !add(6, 8); // 6 cycles in VLSU, 8 cycles memory latency
-defvar CVA6VLatencyVALUint = 7;
-defvar CVA6VLatencyVALUfp  = 8;
-defvar CVA6VLatencyVSLD    = 3;
-defvar CVA6VLatencyELEM    = 5;
+class CVA6VLatencyVLSU<string op, bit indexed = 0> {
+  int c = !cond(
+    // indexed loads need the cycles from index read to read data writeback, whereas (unit-)strided
+    // loads are modelled with a latency from memory request to read data writeback
+    !eq(op, "load") : !add(!if(indexed, 5, // cycles from index read to memory request
+                               0),
+                           8,  // average cycles from memory request to memory result
+                           5), // cycles from memory result to read data writeback
+    // stores are modelled with a latency from index/data read to memory request
+    !eq(op, "store") : !if(indexed, 5, 4)
+  );
+}
+
+class CVA6VLatencyVALU<string first_vrf_rd, bit isF = 0> {
+  int c = !cond(
+    !eq(first_vrf_rd, "pre") : !add(9, isF),
+    !eq(first_vrf_rd, "mul") : !add(8, isF),
+    !eq(first_vrf_rd, "add") : !add(7, isF),
+    // instructions not using any vector operands are modelled with latency 1 because scalar
+    // operands are expected to be available much earlier
+    !eq(first_vrf_rd, "none") : 1
+  );
+}
+
+defvar CVA6VLatencyVSLD = 5;
+defvar CVA6VLatencyELEM = 7;
 
 // CVA6V machine model for scheduling and other instruction cost heuristics.
 def CVA6VModel : SchedMachineModel {
@@ -292,7 +313,7 @@ def : WriteRes<WriteVSETVL, [CVA6VUnitVCFG]>;
 foreach mx = SchedMxList in {
   defvar LMulCycles = CVA6VGetLMulCyclesVLSUdense<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxList>.c;
-  let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [LMulCycles] in {
+  let Latency = CVA6VLatencyVLSU<"load">.c, ReleaseAtCycles = [LMulCycles] in {
     defm "" : LMULWriteResMX<"WriteVLDE",    [CVA6VUnitVLSU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVLDM",    [CVA6VUnitVLSU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVLDFF",   [CVA6VUnitVLSU], mx, IsWorstCase>;
@@ -301,7 +322,7 @@ foreach mx = SchedMxList in {
     defm "" : LMULWriteResMX<"WriteVLDS32",  [CVA6VUnitVLSU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVLDS64",  [CVA6VUnitVLSU], mx, IsWorstCase>;
   }
-  let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [LMulCycles] in {
+  let Latency = CVA6VLatencyVLSU<"store">.c, ReleaseAtCycles = [LMulCycles] in {
     defm "" : LMULWriteResMX<"WriteVSTE",    [CVA6VUnitVLSU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSTM",    [CVA6VUnitVLSU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSTS8",   [CVA6VUnitVLSU], mx, IsWorstCase>;
@@ -310,13 +331,14 @@ foreach mx = SchedMxList in {
     defm "" : LMULWriteResMX<"WriteVSTS64",  [CVA6VUnitVLSU], mx, IsWorstCase>;
   }
   foreach eew = [8, 16, 32, 64] in {
+    // note: assume (unit-)strided vector segment loads/stores can always execute in dense mode
     foreach nf=2-8 in {
-      let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(nf, LMulCycles)] in {
+      let Latency = CVA6VLatencyVLSU<"load">.c, ReleaseAtCycles = [LMulCycles] in {
         defm "" : LMULWriteResMX<"WriteVLSEG" # nf # "e" # eew,   [CVA6VUnitVLSU], mx, IsWorstCase>;
         defm "" : LMULWriteResMX<"WriteVLSEGFF" # nf # "e" # eew, [CVA6VUnitVLSU], mx, IsWorstCase>;
         defm "" : LMULWriteResMX<"WriteVLSSEG" # nf # "e" # eew,  [CVA6VUnitVLSU], mx, IsWorstCase>;
       }
-      let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(nf, LMulCycles)] in {
+      let Latency = CVA6VLatencyVLSU<"store">.c, ReleaseAtCycles = [LMulCycles] in {
         defm "" : LMULWriteResMX<"WriteVSSEG" # nf # "e" # eew,   [CVA6VUnitVLSU], mx, IsWorstCase>;
         defm "" : LMULWriteResMX<"WriteVSSSEG" # nf # "e" # eew,  [CVA6VUnitVLSU], mx, IsWorstCase>;
       }
@@ -330,20 +352,20 @@ foreach mx = SchedMxList in {
     defvar LMulCycles = CVA6VGetLMulCyclesVLSUsparse<mx, eew>.c;
     // note: a dedicated worst case is defined for each EEW, hence we do not CVA6VIsWorstCaseMXSEW
     defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxList>.c;
-    let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [LMulCycles] in {
+    let Latency = CVA6VLatencyVLSU<"load", indexed=1>.c, ReleaseAtCycles = [LMulCycles] in {
       defm "" : LMULWriteResMX<"WriteVLDUX" # eew,  [CVA6VUnitVLSU], mx, IsWorstCase>;
       defm "" : LMULWriteResMX<"WriteVLDOX" # eew,  [CVA6VUnitVLSU], mx, IsWorstCase>;
     }
-    let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [LMulCycles] in {
+    let Latency = CVA6VLatencyVLSU<"store", indexed=1>.c, ReleaseAtCycles = [LMulCycles] in {
       defm "" : LMULWriteResMX<"WriteVSTUX" # eew,  [CVA6VUnitVLSU], mx, IsWorstCase>;
       defm "" : LMULWriteResMX<"WriteVSTOX" # eew,  [CVA6VUnitVLSU], mx, IsWorstCase>;
     }
     foreach nf=2-8 in {
-      let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(nf, LMulCycles)] in {
+      let Latency = CVA6VLatencyVLSU<"load", indexed=1>.c, ReleaseAtCycles = [!mul(nf, LMulCycles)] in {
         defm "" : LMULWriteResMX<"WriteVLUXSEG" # nf # "e" # eew, [CVA6VUnitVLSU], mx, IsWorstCase>;
         defm "" : LMULWriteResMX<"WriteVLOXSEG" # nf # "e" # eew, [CVA6VUnitVLSU], mx, IsWorstCase>;
       }
-      let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(nf, LMulCycles)] in {
+      let Latency = CVA6VLatencyVLSU<"store", indexed=1>.c, ReleaseAtCycles = [!mul(nf, LMulCycles)] in {
         defm "" : LMULWriteResMX<"WriteVSUXSEG" # nf # "e" # eew, [CVA6VUnitVLSU], mx, IsWorstCase>;
         defm "" : LMULWriteResMX<"WriteVSOXSEG" # nf # "e" # eew, [CVA6VUnitVLSU], mx, IsWorstCase>;
       }
@@ -352,36 +374,42 @@ foreach mx = SchedMxList in {
 }
 
 // Whole register move/load/store
-let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [!mul(4, 1)] in
+let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [!mul(4, 1)] in
   def : WriteRes<WriteVMov1V, [CVA6VUnitVALU]>;
-let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [!mul(4, 2)] in
+let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [!mul(4, 2)] in
   def : WriteRes<WriteVMov2V, [CVA6VUnitVALU]>;
-let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [!mul(4, 4)] in
+let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [!mul(4, 4)] in
   def : WriteRes<WriteVMov4V, [CVA6VUnitVALU]>;
-let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [!mul(4, 8)] in
+let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [!mul(4, 8)] in
   def : WriteRes<WriteVMov8V, [CVA6VUnitVALU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 1)] in
+let Latency = CVA6VLatencyVLSU<"load">.c, ReleaseAtCycles = [!mul(4, 1)] in
   def : WriteRes<WriteVLD1R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 2)] in
+let Latency = CVA6VLatencyVLSU<"load">.c, ReleaseAtCycles = [!mul(4, 2)] in
   def : WriteRes<WriteVLD2R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 4)] in
+let Latency = CVA6VLatencyVLSU<"load">.c, ReleaseAtCycles = [!mul(4, 4)] in
   def : WriteRes<WriteVLD4R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 8)] in
+let Latency = CVA6VLatencyVLSU<"load">.c, ReleaseAtCycles = [!mul(4, 8)] in
   def : WriteRes<WriteVLD8R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 1)] in
+let Latency = CVA6VLatencyVLSU<"store">.c, ReleaseAtCycles = [!mul(4, 1)] in
   def : WriteRes<WriteVST1R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 2)] in
+let Latency = CVA6VLatencyVLSU<"store">.c, ReleaseAtCycles = [!mul(4, 2)] in
   def : WriteRes<WriteVST2R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 4)] in
+let Latency = CVA6VLatencyVLSU<"store">.c, ReleaseAtCycles = [!mul(4, 4)] in
   def : WriteRes<WriteVST4R,  [CVA6VUnitVLSU]>;
-let Latency = CVA6VLatencyVLSU, ReleaseAtCycles = [!mul(4, 8)] in
+let Latency = CVA6VLatencyVLSU<"store">.c, ReleaseAtCycles = [!mul(4, 8)] in
   def : WriteRes<WriteVST8R,  [CVA6VUnitVLSU]>;
 
 // 11. Vector Integer Arithmetic Instructions
 foreach mx = SchedMxList in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxList>.c;
-  let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [LMulCycles] in {
+  // 0 vector operands
+  let Latency = CVA6VLatencyVALU<"none">.c, ReleaseAtCycles = [LMulCycles] in {
+    defm "" : LMULWriteResMX<"WriteVIMovX", [CVA6VUnitVALU], mx, IsWorstCase>;
+    defm "" : LMULWriteResMX<"WriteVIMovI", [CVA6VUnitVALU], mx, IsWorstCase>;
+  }
+  // 1 or 2 vector operands, no VRF read into prefetch buffer
+  let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [LMulCycles] in {
     defm "" : LMULWriteResMX<"WriteVIALUV",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIALUX",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIALUI",   [CVA6VUnitVALU], mx, IsWorstCase>;
@@ -396,19 +424,20 @@ foreach mx = SchedMxList in {
     defm "" : LMULWriteResMX<"WriteVIMergeX", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIMergeI", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIMovV",   [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVIMovX",   [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVIMovI",   [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVShiftV",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVShiftX",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVShiftI",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIMinMaxV", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIMinMaxX", [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVIMulV",    [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIMulX",    [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIMulAddX", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
-  // 3 operands
-  let Latency = !add(CVA6VLatencyVALUint, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  // 2 vector operands, VRF read into prefetch buffer
+  let Latency = CVA6VLatencyVALU<"pre">.c, ReleaseAtCycles = [LMulCycles] in {
+    defm "" : LMULWriteResMX<"WriteVShiftV", [CVA6VUnitVALU], mx, IsWorstCase>;
+    defm "" : LMULWriteResMX<"WriteVIMulV",  [CVA6VUnitVALU], mx, IsWorstCase>;
+  }
+  // 3 vector operands
+  let Latency = !add(CVA6VLatencyVALU<"pre">.c, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVIMulAddV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
 }
@@ -416,7 +445,7 @@ foreach mx = SchedMxList in {
 foreach mx = SchedMxListW in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListW>.c;
-  let Latency = !add(CVA6VLatencyVALUint, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  let Latency = CVA6VLatencyVALU<"pre">.c, ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVIWALUV",    [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIWALUX",    [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVIWALUI",    [CVA6VUnitVALU], mx, IsWorstCase>;
@@ -430,7 +459,7 @@ foreach mx = SchedMxListW in {
 foreach mx = SchedMxListW in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListW>.c;
-  let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  let Latency = !add(CVA6VLatencyVALU<"pre">.c, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVNShiftV", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVNShiftX", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVNShiftI", [CVA6VUnitVALU], mx, IsWorstCase>;
@@ -444,17 +473,21 @@ foreach mx = SchedMxListW in {
 foreach mx = SchedMxList in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxList>.c;
-  let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [LMulCycles] in {
+  // no VRF read into prefetch buffer
+  let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [LMulCycles] in {
     defm "" : LMULWriteResMX<"WriteVSALUV",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSALUX",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSALUI",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVAALUV",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVAALUX",   [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVSMulV",   [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSMulX",   [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVSShiftV", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSShiftX", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVSShiftI", [CVA6VUnitVALU], mx, IsWorstCase>;
+  }
+  // VRF read into prefetch buffer
+  let Latency = CVA6VLatencyVALU<"pre">.c, ReleaseAtCycles = [LMulCycles] in {
+    defm "" : LMULWriteResMX<"WriteVSMulV",   [CVA6VUnitVALU], mx, IsWorstCase>;
+    defm "" : LMULWriteResMX<"WriteVSShiftV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
 }
 
@@ -462,10 +495,10 @@ foreach mx = SchedMxList in {
 foreach mx = SchedMxListF in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListF>.c;
-  let Latency = CVA6VLatencyVALUfp, ReleaseAtCycles = [LMulCycles] in {
+  // 1 or 2 vector operands, no VRF read into prefetch buffer
+  let Latency = CVA6VLatencyVALU<"mul", isF=1>.c, ReleaseAtCycles = [LMulCycles] in {
     defm "" : LMULWriteResMX<"WriteVFALUV",     [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFALUF",     [CVA6VUnitVALU], mx, IsWorstCase>;
-    defm "" : LMULWriteResMX<"WriteVFMulV",     [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFMulF",     [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFMulAddF",  [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFRecpV",    [CVA6VUnitVALU], mx, IsWorstCase>;
@@ -481,8 +514,12 @@ foreach mx = SchedMxListF in {
     defm "" : LMULWriteResMX<"WriteVFCvtIToFV", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFCvtFToIV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
-  // 3 operands
-  let Latency = !add(CVA6VLatencyVALUfp, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  // 2 vector operands, VRF read into prefetch buffer
+  let Latency = CVA6VLatencyVALU<"pre", isF=1>.c, ReleaseAtCycles = [LMulCycles] in {
+    defm "" : LMULWriteResMX<"WriteVFMulV", [CVA6VUnitVALU], mx, IsWorstCase>;
+  }
+  // 3 vector operands
+  let Latency = !add(CVA6VLatencyVALU<"pre", isF=1>.c, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVFMulAddV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
 }
@@ -490,7 +527,7 @@ foreach mx = SchedMxListF in {
 foreach mx = SchedMxListFW in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListFW>.c;
-  let Latency = !add(CVA6VLatencyVALUfp, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  let Latency = CVA6VLatencyVALU<"pre", isF=1>.c, ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVFWALUV",     [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFWALUF",     [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFWMulV",     [CVA6VUnitVALU], mx, IsWorstCase>;
@@ -504,7 +541,7 @@ foreach mx = SchedMxListFW in {
 foreach mx = SchedMxListW in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListW>.c;
-  let Latency = !add(CVA6VLatencyVALUfp, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  let Latency = CVA6VLatencyVALU<"pre", isF=1>.c, ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVFWCvtIToFV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
 }
@@ -512,7 +549,7 @@ foreach mx = SchedMxListW in {
 foreach mx = SchedMxListFW in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListFW>.c;
-  let Latency = CVA6VLatencyVALUfp, ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  let Latency = !add(CVA6VLatencyVALU<"pre", isF=1>.c, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVFNCvtFToFV", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVFNCvtIToFV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
@@ -520,7 +557,7 @@ foreach mx = SchedMxListFW in {
 foreach mx = SchedMxListW in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxListW>.c;
-  let Latency = CVA6VLatencyVALUfp, ReleaseAtCycles = [!mul(2, LMulCycles)] in {
+  let Latency = !add(CVA6VLatencyVALU<"pre", isF=1>.c, 1), ReleaseAtCycles = [!mul(2, LMulCycles)] in {
     defm "" : LMULWriteResMX<"WriteVFNCvtFToIV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
 }
@@ -529,7 +566,7 @@ foreach mx = SchedMxListF in {
   foreach sew = SchedSEWSet<mx, isF=1>.val in {
     defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
     defvar IsWorstCase = CVA6VIsWorstCaseMXSEW<mx, sew, SchedMxListF, isF=1>.c;
-    let Latency = !add(CVA6VLatencyVALUfp, 8), ReleaseAtCycles = [!mul(64, LMulCycles)] in {
+    let Latency = !add(CVA6VLatencyVALU<"pre", isF=1>.c, 8), ReleaseAtCycles = [!mul(64, LMulCycles)] in {
       defm "" : LMULSEWWriteResMXSEW<"WriteVFDivV",  [CVA6VUnitVALU], mx, sew, IsWorstCase>;
       defm "" : LMULSEWWriteResMXSEW<"WriteVFDivF",  [CVA6VUnitVALU], mx, sew, IsWorstCase>;
       defm "" : LMULSEWWriteResMXSEW<"WriteVFSqrtV", [CVA6VUnitVALU], mx, sew, IsWorstCase>;
@@ -541,7 +578,7 @@ foreach mx = SchedMxList in {
   foreach sew = SchedSEWSet<mx>.val in {
     defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
     defvar IsWorstCase = CVA6VIsWorstCaseMXSEW<mx, sew, SchedMxList>.c;
-    let Latency = !add(CVA6VLatencyVALUfp, 8), ReleaseAtCycles = [!mul(64, LMulCycles)] in {
+    let Latency = !add(CVA6VLatencyVALU<"pre", isF=1>.c, 8), ReleaseAtCycles = [!mul(64, LMulCycles)] in {
       defm "" : LMULSEWWriteResMXSEW<"WriteVIDivV", [CVA6VUnitVALU], mx, sew, IsWorstCase>;
       defm "" : LMULSEWWriteResMXSEW<"WriteVIDivX", [CVA6VUnitVALU], mx, sew, IsWorstCase>;
     }
@@ -553,7 +590,7 @@ foreach mx = SchedMxList in {
 foreach mx = SchedMxList in {
   defvar LMulCycles = CVA6VGetLMulCyclesVALU<mx>.c;
   defvar IsWorstCase = CVA6VIsWorstCaseMX<mx, SchedMxList>.c;
-  let Latency = CVA6VLatencyVALUint, ReleaseAtCycles = [LMulCycles] in {
+  let Latency = CVA6VLatencyVALU<"mul">.c, ReleaseAtCycles = [LMulCycles] in {
     defm "" : LMULWriteResMX<"WriteVMALUV", [CVA6VUnitVALU], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVMIdxV", [CVA6VUnitVALU], mx, IsWorstCase>;
   }
@@ -567,7 +604,6 @@ foreach mx = SchedMxList in {
     defm "" : LMULWriteResMX<"WriteVMFFSV", [CVA6VUnitVSLD], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVMSFSV", [CVA6VUnitVSLD], mx, IsWorstCase>;
     defm "" : LMULWriteResMX<"WriteVMIotV", [CVA6VUnitVALU], mx, IsWorstCase>;
-
   }
 }
 
