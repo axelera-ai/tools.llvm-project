@@ -378,7 +378,7 @@ uint64_t MCAssembler::computeFragmentSize(const MCAsmLayout &Layout,
       TargetLocation += Val;
     }
     int64_t Size = TargetLocation - FragmentOffset;
-    if (Size < 0 || Size >= 0x40000000) {
+    if (Size < 0) {
       getContext().reportError(
           OF.getLoc(), "invalid .org offset '" + Twine(TargetLocation) +
                            "' (at offset '" + Twine(FragmentOffset) + "')");
