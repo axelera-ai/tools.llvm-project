@@ -60,6 +60,8 @@ private:
                            MachineBasicBlock::iterator MBBI);
   bool expandPseudoReadVLENBViaVSETVLIX0(MachineBasicBlock &MBB,
                                          MachineBasicBlock::iterator MBBI);
+  bool expandPseudoVSETVLMatrix(MachineBasicBlock &MBB,
+                                MachineBasicBlock::iterator MBBI);
 #ifndef NDEBUG
   unsigned getInstSizeInBytes(const MachineFunction &MF) const {
     unsigned Size = 0;
@@ -192,6 +194,8 @@ bool RISCVExpandPseudo::expandMI(MachineBasicBlock &MBB,
     return expandVMSET_VMCLR(MBB, MBBI, RISCV::VMXNOR_MM);
   case RISCV::PseudoReadVLENBViaVSETVLIX0:
     return expandPseudoReadVLENBViaVSETVLIX0(MBB, MBBI);
+  case RISCV::PseudoVSETVL_MATRIX:
+    return expandPseudoVSETVLMatrix(MBB, MBBI);
   }
 
   return false;
@@ -559,6 +563,35 @@ bool RISCVExpandPseudo::expandRV32ZdinxLoad(MachineBasicBlock &MBB,
   }
   MIBLo.setMemRefs(NewLoMMOs);
   MIBHi.setMemRefs(NewHiMMOs);
+
+  MBBI->eraseFromParent();
+  return true;
+}
+
+// Expand a PseudoVSETVL_MATRIX:
+//   $rd = matrix-vsetvl $rs1, vtype_imm
+// into:
+//   movImm   $rd, vtype_imm         ; LUI/ADDI/SLLI sequence as needed
+//   vsetvl   $rd, $rs1, $rd         ; rs2 is read before rd is written, so
+//                                   ; reusing $rd as the scratch is safe.
+bool RISCVExpandPseudo::expandPseudoVSETVLMatrix(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI) {
+  DebugLoc DL = MBBI->getDebugLoc();
+  Register Dst = MBBI->getOperand(0).getReg();
+  Register AVL = MBBI->getOperand(1).getReg();
+  int64_t VTypeImm = MBBI->getOperand(2).getImm();
+
+  // Materialize the vtype constant into Dst.
+  TII->movImm(MBB, MBBI, DL, Dst, static_cast<uint64_t>(VTypeImm),
+              MachineInstr::NoFlags, /*DstRenamable=*/false,
+              /*DstIsDead=*/false);
+
+  // Emit `vsetvl Dst, AVL, Dst`. The real instruction defs VL and VTYPE
+  // implicitly (via RVInstSetVL).
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::VSETVL))
+      .addReg(Dst, RegState::Define)
+      .addReg(AVL)
+      .addReg(Dst);
 
   MBBI->eraseFromParent();
   return true;
