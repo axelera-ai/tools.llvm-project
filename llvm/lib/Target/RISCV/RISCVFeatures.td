@@ -744,6 +744,33 @@ def HasStdExtZvfbfminOrZvfofp8min
                          "'Zvfbfmin' (Vector BF16 Converts) or "
                          "'Zvfofp8min' (Vector OFP8 Converts)">;
 
+// Integrated Matrix Extensions (Zvvm family).
+// Draft spec: https://github.com/riscv/integrated-matrix-extension
+
+def FeatureStdExtZvvmm
+    : RISCVExperimentalExtension<0, 1,
+                                 "Integer Matrix Multiply-Accumulate",
+                                 [FeatureStdExtZve32x]>;
+def HasStdExtZvvmm : Predicate<"Subtarget->hasStdExtZvvmm()">,
+                     AssemblerPredicate<(all_of FeatureStdExtZvvmm),
+                         "'Zvvmm' (Integer Matrix Multiply-Accumulate)">;
+
+def FeatureStdExtZvvmtls
+    : RISCVExperimentalExtension<0, 1,
+                                 "Matrix Tile Load/Store",
+                                 [FeatureStdExtZve32x]>;
+def HasStdExtZvvmtls : Predicate<"Subtarget->hasStdExtZvvmtls()">,
+                       AssemblerPredicate<(all_of FeatureStdExtZvvmtls),
+                           "'Zvvmtls' (Matrix Tile Load/Store)">;
+
+def FeatureStdExtZvvmttls
+    : RISCVExperimentalExtension<0, 1,
+                                 "Transposing Matrix Tile Load/Store",
+                                 [FeatureStdExtZve32x]>;
+def HasStdExtZvvmttls : Predicate<"Subtarget->hasStdExtZvvmttls()">,
+                        AssemblerPredicate<(all_of FeatureStdExtZvvmttls),
+                            "'Zvvmttls' (Transposing Matrix Tile Load/Store)">;
+
 // Vector Cryptography and Bitmanip Extensions
 
 def FeatureStdExtZvkb
