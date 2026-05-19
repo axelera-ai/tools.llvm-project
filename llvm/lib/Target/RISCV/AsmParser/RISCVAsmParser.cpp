@@ -214,6 +214,8 @@ class RISCVAsmParser : public MCTargetAsmParser {
   template <bool IsRV64Inst> ParseStatus parseGPRPair(OperandVector &Operands);
   ParseStatus parseGPRPair(OperandVector &Operands, bool IsRV64Inst);
   ParseStatus parseFRMArg(OperandVector &Operands);
+  ParseStatus parseLambdaArg(OperandVector &Operands);
+  ParseStatus parseLooseMaskReg(OperandVector &Operands);
   ParseStatus parseFenceArg(OperandVector &Operands);
   ParseStatus parseRegList(OperandVector &Operands, bool MustIncludeS0 = false);
   ParseStatus parseRegListS0(OperandVector &Operands) {
@@ -284,6 +286,7 @@ class RISCVAsmParser : public MCTargetAsmParser {
   std::unique_ptr<RISCVOperand> defaultMaskRegOp() const;
   std::unique_ptr<RISCVOperand> defaultFRMArgOp() const;
   std::unique_ptr<RISCVOperand> defaultFRMArgLegacyOp() const;
+  std::unique_ptr<RISCVOperand> defaultLambdaArgOp() const;
 
 public:
   enum RISCVMatchResultTy : unsigned {
@@ -344,6 +347,7 @@ struct RISCVOperand final : public MCParsedAsmOperand {
     SystemRegister,
     VType,
     FRM,
+    Lambda,
     Fence,
     RegList,
     StackAdj,
@@ -380,6 +384,13 @@ struct RISCVOperand final : public MCParsedAsmOperand {
     RISCVFPRndMode::RoundingMode FRM;
   };
 
+  // Lambda override for Zvvmtls / Zvvmttls tile load/store. Encoded as a
+  // 3-bit immediate at bits [31:29] of the instruction; 0 = use vtype.lambda,
+  // 1..7 = L1, L2, L4, L8, L16, L32, L64.
+  struct LambdaOp {
+    unsigned Val;
+  };
+
   struct FenceOp {
     unsigned Val;
   };
@@ -406,6 +417,7 @@ struct RISCVOperand final : public MCParsedAsmOperand {
     SysRegOp SysReg;
     VTypeOp VType;
     FRMOp FRM;
+    LambdaOp Lambda;
     FenceOp Fence;
     RegListOp RegList;
     StackAdjOp StackAdj;
@@ -440,6 +452,9 @@ public:
       break;
     case KindTy::FRM:
       FRM = o.FRM;
+      break;
+    case KindTy::Lambda:
+      Lambda = o.Lambda;
       break;
     case KindTy::Fence:
       Fence = o.Fence;
@@ -642,6 +657,9 @@ public:
   bool isFRMArg() const { return Kind == KindTy::FRM; }
   bool isFRMArgLegacy() const { return Kind == KindTy::FRM; }
   bool isRTZArg() const { return isFRMArg() && FRM.FRM == RISCVFPRndMode::RTZ; }
+
+  /// Return true if the operand is a valid Zvvm tile lambda override.
+  bool isLambdaArg() const { return Kind == KindTy::Lambda; }
 
   /// Return true if the operand is a valid fli.s floating-point immediate.
   bool isLoadFPImm() const {
@@ -1019,6 +1037,11 @@ public:
     return FRM.FRM;
   }
 
+  unsigned getLambda() const {
+    assert(Kind == KindTy::Lambda && "Invalid type access!");
+    return Lambda.Val;
+  }
+
   unsigned getFence() const {
     assert(Kind == KindTy::Fence && "Invalid type access!");
     return Fence.Val;
@@ -1065,6 +1088,9 @@ public:
       OS << "<fence: ";
       OS << getFence();
       OS << '>';
+      break;
+    case KindTy::Lambda:
+      OS << "<lambda: " << getLambda() << '>';
       break;
     case KindTy::RegList:
       OS << "<reglist: ";
@@ -1134,6 +1160,14 @@ public:
   createFRMArg(RISCVFPRndMode::RoundingMode FRM, SMLoc S) {
     auto Op = std::make_unique<RISCVOperand>(KindTy::FRM);
     Op->FRM.FRM = FRM;
+    Op->StartLoc = S;
+    Op->EndLoc = S;
+    return Op;
+  }
+
+  static std::unique_ptr<RISCVOperand> createLambdaArg(unsigned Val, SMLoc S) {
+    auto Op = std::make_unique<RISCVOperand>(KindTy::Lambda);
+    Op->Lambda.Val = Val;
     Op->StartLoc = S;
     Op->EndLoc = S;
     return Op;
@@ -1276,6 +1310,11 @@ public:
   void addFRMArgOperands(MCInst &Inst, unsigned N) const {
     assert(N == 1 && "Invalid number of operands!");
     Inst.addOperand(MCOperand::createImm(getFRM()));
+  }
+
+  void addLambdaArgOperands(MCInst &Inst, unsigned N) const {
+    assert(N == 1 && "Invalid number of operands!");
+    Inst.addOperand(MCOperand::createImm(getLambda()));
   }
 };
 } // end anonymous namespace.
@@ -2608,6 +2647,40 @@ ParseStatus RISCVAsmParser::parseFRMArg(OperandVector &Operands) {
   return ParseStatus::Success;
 }
 
+// Parses the optional Zvvm tile lambda override:
+//   "L1" | "L2" | "L4" | "L8" | "L16" | "L32" | "L64"
+// mapped to the 3-bit encoding values 1..7. Value 0 (use vtype.lambda) is
+// supplied by defaultLambdaArgOp when the operand is omitted.
+//
+// Returns NoMatch (rather than TokError) when the next token is not a valid
+// Lλ identifier, so the asm matcher can fall back to the default and then try
+// to match any subsequent literal (e.g. ", v0.t" on a masked variant).
+ParseStatus RISCVAsmParser::parseLambdaArg(OperandVector &Operands) {
+  // The asm matcher consumed the leading comma before delegating here, so the
+  // current token is the candidate Lλ identifier. The caller may follow this
+  // operand with another optional operand (VMaskOp parsing "v0.t"); we must
+  // therefore peek without committing if the token isn't a valid Lλ.
+  if (getLexer().isNot(AsmToken::Identifier))
+    return ParseStatus::NoMatch;
+
+  StringRef Str = getLexer().getTok().getIdentifier();
+  unsigned Val = StringSwitch<unsigned>(Str)
+                     .Case("L1", 1)
+                     .Case("L2", 2)
+                     .Case("L4", 3)
+                     .Case("L8", 4)
+                     .Case("L16", 5)
+                     .Case("L32", 6)
+                     .Case("L64", 7)
+                     .Default(~0u);
+  if (Val == ~0u)
+    return ParseStatus::NoMatch;
+
+  Operands.push_back(RISCVOperand::createLambdaArg(Val, getLoc()));
+  Lex(); // Eat identifier token.
+  return ParseStatus::Success;
+}
+
 ParseStatus RISCVAsmParser::parseFenceArg(OperandVector &Operands) {
   const AsmToken &Tok = getLexer().getTok();
 
@@ -3773,6 +3846,33 @@ std::unique_ptr<RISCVOperand> RISCVAsmParser::defaultFRMArgOp() const {
 std::unique_ptr<RISCVOperand> RISCVAsmParser::defaultFRMArgLegacyOp() const {
   return RISCVOperand::createFRMArg(RISCVFPRndMode::RoundingMode::RNE,
                                     llvm::SMLoc());
+}
+
+std::unique_ptr<RISCVOperand> RISCVAsmParser::defaultLambdaArgOp() const {
+  // Omitting "Lλ" means lambda = 0 in the encoding (use vtype.lambda).
+  return RISCVOperand::createLambdaArg(0, llvm::SMLoc());
+}
+
+// Like parseMaskReg, but returns NoMatch (rather than a hard Error) when the
+// next identifier is not a v0.t-style mask. Used by the Zvvm tile load/store
+// InstAliases so the asm matcher can backtrack to the canonical form when an
+// explicit Lλ is what follows rs2 instead of the mask.
+ParseStatus RISCVAsmParser::parseLooseMaskReg(OperandVector &Operands) {
+  if (getLexer().isNot(AsmToken::Identifier))
+    return ParseStatus::NoMatch;
+
+  StringRef Name = getLexer().getTok().getIdentifier();
+  if (!Name.consume_back(".t"))
+    return ParseStatus::NoMatch;
+  MCRegister Reg = matchRegisterNameHelper(Name);
+  if (!Reg || Reg != RISCV::V0)
+    return ParseStatus::NoMatch;
+
+  SMLoc S = getLoc();
+  SMLoc E = getTok().getEndLoc();
+  Lex();
+  Operands.push_back(RISCVOperand::createReg(RISCV::V0, S, E));
+  return ParseStatus::Success;
 }
 
 bool RISCVAsmParser::validateInstruction(MCInst &Inst,
