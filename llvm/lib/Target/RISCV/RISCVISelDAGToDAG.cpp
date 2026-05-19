@@ -518,6 +518,62 @@ void RISCVDAGToDAGISel::selectVSETVLI(SDNode *Node) {
               CurDAG->getMachineNode(Opcode, DL, XLenVT, VLOperand, VTypeIOp));
 }
 
+// Lower llvm.riscv.vsetvl.matrix to a register-form `vsetvl` instruction.
+// The Zvvm extension adds four new vtype fields (lambda, bs, altfmt_A,
+// altfmt_B) at the high end of the vtype CSR; these don't fit in the 11-bit
+// immediate of `vsetvli`, so we materialize the full vtype value into a GPR
+// and use the register form.
+//
+// vtype layout (bit positions, LSB = 0; matches RISCVVType::encodeVTYPE):
+//   [2:0]            = vlmul
+//   [5:3]            = vsew
+//   [6]              = vta
+//   [7]              = vma
+//   ...
+//   [XLEN-7]         = altfmt_B
+//   [XLEN-6]         = altfmt_A
+//   [XLEN-5]         = bs
+//   [XLEN-4:XLEN-2]  = lambda[2:0]
+//   [XLEN-1]         = vill (hardware-controlled; software writes 0 here)
+void RISCVDAGToDAGISel::selectVSETVLMatrix(SDNode *Node) {
+  assert(Node->getOpcode() == ISD::INTRINSIC_WO_CHAIN && "Unexpected opcode");
+
+  SDLoc DL(Node);
+  MVT XLenVT = Subtarget->getXLenVT();
+  unsigned XLen = Subtarget->getXLen();
+
+  // Operand 0 is the intrinsic ID; operand 1 is AVL; operands 2..9 are the
+  // immarg vtype fields in the order declared by the .td.
+  auto ImmOp = [&](unsigned Idx) {
+    return Node->getConstantOperandVal(Idx);
+  };
+  uint64_t VSEW    = ImmOp(2) & 0x7;
+  uint64_t VLMUL   = ImmOp(3) & 0x7;
+  uint64_t VTA     = ImmOp(4) & 0x1;
+  uint64_t VMA     = ImmOp(5) & 0x1;
+  uint64_t Lambda  = ImmOp(6) & 0x7;
+  uint64_t Bs      = ImmOp(7) & 0x1;
+  uint64_t AltA    = ImmOp(8) & 0x1;
+  uint64_t AltB    = ImmOp(9) & 0x1;
+
+  uint64_t VTypeImm = VLMUL | (VSEW << 3) | (VTA << 6) | (VMA << 7);
+  VTypeImm |= AltB   << (XLen - 7);
+  VTypeImm |= AltA   << (XLen - 6);
+  VTypeImm |= Bs     << (XLen - 5);
+  VTypeImm |= Lambda << (XLen - 4);
+
+  // Emit the PseudoVSETVL_MATRIX pseudo with avl as rs1 and the full vtype
+  // value as a target immediate. RISCVExpandPseudoInsts materializes the
+  // constant into a GPR and emits the register-form `vsetvl` instruction.
+  // Routing through a pseudo keeps the InsertVSETVLI pass aware that vtype
+  // (including the matrix-specific fields) has been written.
+  SDValue AVL = Node->getOperand(1);
+  SDValue VTypeOp = CurDAG->getSignedTargetConstant(
+      static_cast<int64_t>(VTypeImm), DL, XLenVT);
+  ReplaceNode(Node, CurDAG->getMachineNode(RISCV::PseudoVSETVL_MATRIX, DL,
+                                           XLenVT, AVL, VTypeOp));
+}
+
 void RISCVDAGToDAGISel::selectXSfmmVSET(SDNode *Node) {
   if (!Subtarget->hasVendorXSfmmbase())
     return;
@@ -2146,6 +2202,8 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_vsetvli:
     case Intrinsic::riscv_vsetvlimax:
       return selectVSETVLI(Node);
+    case Intrinsic::riscv_vsetvl_matrix:
+      return selectVSETVLMatrix(Node);
     case Intrinsic::riscv_sf_vsettnt:
     case Intrinsic::riscv_sf_vsettm:
     case Intrinsic::riscv_sf_vsettk:
