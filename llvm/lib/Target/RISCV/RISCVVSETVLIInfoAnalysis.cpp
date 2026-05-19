@@ -320,12 +320,33 @@ DemandedFields getDemanded(const MachineInstr &MI, const RISCVSubtarget *ST) {
   Res.TWiden = RISCVII::hasTWidenOp(MI.getDesc().TSFlags) ||
                RISCVInstrInfo::isXSfmmVectorConfigInstr(MI);
 
+  // Note: Zvvm matrix instructions don't add their matrix fields to the
+  // demand set here. Doing so would force needVSETVLI to fire when the
+  // per-instruction computeInfoForInstr (which has Lambda/Bs/AltFmt{A,B} = 0
+  // by default) is compared against the current matrix state. The matrix
+  // fields are instead preserved across vtype writes by the emission path
+  // (insertVSETVLI routes through PseudoVSETVL_MATRIX whenever the running
+  // VSETVLIInfo has non-default matrix state).
+
   return Res;
 }
 
 bool VSETVLIInfo::hasCompatibleVTYPE(const DemandedFields &Used,
                                      const VSETVLIInfo &Require) const {
-  return areCompatibleVTYPEs(Require.encodeVTYPE(), encodeVTYPE(), Used);
+  if (!areCompatibleVTYPEs(Require.encodeVTYPE(), encodeVTYPE(), Used))
+    return false;
+  // The Zvvm matrix vtype fields (lambda / bs / altfmt_A / altfmt_B) sit at
+  // the high end of vtype and are not part of the 11-bit immediate encoded
+  // by encodeVTYPE(). Compare them directly when demanded.
+  if (Used.Lambda && Require.getLambda() != getLambda())
+    return false;
+  if (Used.Bs && Require.getBs() != getBs())
+    return false;
+  if (Used.AltFmtA && Require.getAltFmtA() != getAltFmtA())
+    return false;
+  if (Used.AltFmtB && Require.getAltFmtB() != getAltFmtB())
+    return false;
+  return true;
 }
 
 // If the AVL is defined by a vsetvli's output vl with the same VLMAX, we can
@@ -367,6 +388,16 @@ RISCVVSETVLIInfoAnalysis::getInfoForVSETVLI(const MachineInstr &MI) const {
       NewInfo.setAVLRegDef(getVNInfoFromReg(ATNReg, MI, LIS), ATNReg);
       break;
     }
+  } else if (MI.getOpcode() == RISCV::PseudoVSETVL_MATRIX) {
+    // Zvvm register-form vsetvl carries the full XLen-wide vtype as an
+    // immediate; AVL comes from operand 1.
+    Register AVLReg = MI.getOperand(1).getReg();
+    VNInfo *VNI = getVNInfoFromReg(AVLReg, MI, LIS);
+    NewInfo.setAVLRegDef(VNI, AVLReg);
+    NewInfo.setMatrixVTYPE(static_cast<uint64_t>(MI.getOperand(2).getImm()),
+                           ST->getXLen());
+    forwardVSETVLIAVL(NewInfo);
+    return NewInfo;
   } else {
     assert(MI.getOpcode() == RISCV::PseudoVSETVLI ||
            MI.getOpcode() == RISCV::PseudoVSETVLIX0);
