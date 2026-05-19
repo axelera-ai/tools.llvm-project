@@ -1978,6 +1978,10 @@ let TargetPrefix = "riscv" in {
   defm vfncvt_sat_f_f_q_alt : RISCVConversionRoundingMode;
 } // TargetPrefix = "riscv"
 
+// Integrated Matrix Extensions (Zvvm family)
+//===----------------------------------------------------------------------===//
+include "llvm/IR/IntrinsicsRISCVZvvm.td"
+
 // Vendor extensions
 //===----------------------------------------------------------------------===//
 include "llvm/IR/IntrinsicsRISCVXTHead.td"

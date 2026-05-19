@@ -165,6 +165,21 @@ void RISCVInstPrinter::printFRMArg(const MCInst *MI, unsigned OpNo,
   O << ", " << RISCVFPRndMode::roundingModeToString(FRMArg);
 }
 
+void RISCVInstPrinter::printLambdaArg(const MCInst *MI, unsigned OpNo,
+                                      const MCSubtargetInfo &STI,
+                                      raw_ostream &O) {
+  // Zvvm tile lambda override. The 3-bit value encodes:
+  //   0 = use vtype.lambda (omitted from asm), 1=L1, 2=L2, 3=L4, 4=L8,
+  //   5=L16, 6=L32, 7=L64.
+  unsigned Val = MI->getOperand(OpNo).getImm();
+  if (Val == 0)
+    return;
+  static const char *const Names[8] = {nullptr,  "L1",  "L2",  "L4",
+                                       "L8",     "L16", "L32", "L64"};
+  assert(Val < 8 && "Invalid lambda encoding");
+  O << ", " << Names[Val];
+}
+
 void RISCVInstPrinter::printFRMArgLegacy(const MCInst *MI, unsigned OpNo,
                                          const MCSubtargetInfo &STI,
                                          raw_ostream &O) {
