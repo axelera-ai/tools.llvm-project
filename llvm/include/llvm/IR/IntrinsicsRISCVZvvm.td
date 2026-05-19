@@ -26,7 +26,15 @@ let TargetPrefix = "riscv" in {
   //   VLMUL    — 3-bit: 0=m1, 1=m2, 2=m4, 3=m8, 5=mf8, 6=mf4, 7=mf2.
   //   VTA      — 1 bit, tail-agnostic policy.
   //   VMA      — 1 bit, mask-agnostic policy.
-  //   LAMBDA   — 3 bits, 0=use vtype.lambda (preserve), 1..7 = L1..L64.
+  //   LAMBDA   — 3 bits, written directly into vtype.lambda. Per the IME
+  //              spec the encoding is 0=invalid/dynamic (the next matrix
+  //              multiply-accumulate will fault), 1=L1, 2=L2, 3=L4, 4=L8,
+  //              5=L16, 6=L32, 7=L64. The field is WARL: hardware may clamp
+  //              an unsupported request to the largest supported value for
+  //              the current (VLEN, SEW, LMUL); software should read
+  //              vtype.lambda back to detect clamping. This intrinsic does
+  //              NOT preserve any prior vtype.lambda — to keep a previously
+  //              programmed lambda, pass the same value here.
   //   BS       — 1 bit, microscaling block size (0 = 32 elem, 1 = 16 elem).
   //   ALTFMT_A — 1 bit, A operand signedness/format selector.
   //   ALTFMT_B — 1 bit, B operand signedness/format selector.
@@ -95,10 +103,16 @@ let TargetPrefix = "riscv" in {
   // The lambda override (3-bit immediate at bits[31:29] of the instruction) is
   // not an IR operand: each lambda value gets its own intrinsic per the chosen
   // naming scheme. The base intrinsic name uses vtype.lambda; `_l1` ... `_l64`
-  // suffixes select an explicit Lλ override.
+  // suffixes select an explicit Lλ override. The override is WARL just like
+  // vtype.lambda — hardware may clamp it down for the current (VLEN, SEW,
+  // LMUL), so software targeting non-default lambda should plan a runtime
+  // fallback path.
   //
   // `ld` (leading dimension in elements) is held in a GPR. `ld == 0` selects
-  // the default stride of (lambda * LMUL) at the hardware level.
+  // a hardware-defined default stride: `lambda * LMUL` for the order-preserving
+  // variants (vmtl.v / vmts.v) — a contiguous tile — and `VLEN / (SEW * lambda)`
+  // for the transposing variants (vmttl.v / vmtts.v), i.e. the natural maximum
+  // width of a B tile.
   //===--------------------------------------------------------------------===//
 
   class RISCVTileLoadIntr

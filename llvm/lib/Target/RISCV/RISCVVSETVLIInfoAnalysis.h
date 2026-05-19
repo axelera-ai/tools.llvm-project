@@ -420,12 +420,12 @@ public:
     AltFmt = RISCVVType::isAltFmt(VType);
     TWiden =
         RISCVVType::hasXSfmmWiden(VType) ? RISCVVType::getXSfmmWiden(VType) : 0;
-    // vsetvli (immediate form) zeros the high-end bits of vtype, so the Zvvm
-    // matrix fields are cleared. Reflect that here.
-    Lambda = 0;
-    Bs = 0;
-    AltFmtA = 0;
-    AltFmtB = 0;
+    // The Zvvm matrix fields (lambda / bs / altfmt_A / altfmt_B) sit outside
+    // the 11-bit immediate of vsetvli / vsetivli and are not encoded in
+    // `VType` here; leave them at their current value. The IME spec allows
+    // hardware to WARL-re-clamp lambda when SEW or LMUL changes, but does
+    // not require vsetvli to zero the matrix fields, so callers that need
+    // the full vtype state should write it via setMatrixVTYPE.
   }
   // Extract all vtype fields (including the Zvvm matrix fields at the high
   // end) from a full XLen-wide vtype constant — used when interpreting a
