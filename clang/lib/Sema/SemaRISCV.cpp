@@ -78,6 +78,12 @@ static const PrototypeDescriptor RVAndesVectorSignatureTable[] = {
 #undef DECL_SIGNATURE_TABLE
 };
 
+static const PrototypeDescriptor RVZvvmVectorSignatureTable[] = {
+#define DECL_SIGNATURE_TABLE
+#include "clang/Basic/riscv_zvvm_vector_builtin_sema.inc"
+#undef DECL_SIGNATURE_TABLE
+};
+
 static const RVVIntrinsicRecord RVVIntrinsicRecords[] = {
 #define DECL_INTRINSIC_RECORDS
 #include "clang/Basic/riscv_vector_builtin_sema.inc"
@@ -96,6 +102,12 @@ static const RVVIntrinsicRecord RVAndesVectorIntrinsicRecords[] = {
 #undef DECL_INTRINSIC_RECORDS
 };
 
+static const RVVIntrinsicRecord RVZvvmVectorIntrinsicRecords[] = {
+#define DECL_INTRINSIC_RECORDS
+#include "clang/Basic/riscv_zvvm_vector_builtin_sema.inc"
+#undef DECL_INTRINSIC_RECORDS
+};
+
 // Get subsequence of signature table.
 static ArrayRef<PrototypeDescriptor>
 ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
@@ -106,6 +118,8 @@ ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
     return ArrayRef(&RVSiFiveVectorSignatureTable[Index], Length);
   case IntrinsicKind::ANDES_VECTOR:
     return ArrayRef(&RVAndesVectorSignatureTable[Index], Length);
+  case IntrinsicKind::ZVVM_VECTOR:
+    return ArrayRef(&RVZvvmVectorSignatureTable[Index], Length);
   }
   llvm_unreachable("Unhandled IntrinsicKind");
 }
@@ -188,6 +202,7 @@ private:
   bool ConstructedRISCVVBuiltins;
   bool ConstructedRISCVSiFiveVectorBuiltins;
   bool ConstructedRISCVAndesVectorBuiltins;
+  bool ConstructedRISCVZvvmVectorBuiltins;
 
   // List of all RVV intrinsic.
   std::vector<RVVIntrinsicDef> IntrinsicList;
@@ -214,6 +229,7 @@ public:
     ConstructedRISCVVBuiltins = false;
     ConstructedRISCVSiFiveVectorBuiltins = false;
     ConstructedRISCVAndesVectorBuiltins = false;
+    ConstructedRISCVZvvmVectorBuiltins = false;
   }
 
   // Initialize IntrinsicList
@@ -356,6 +372,12 @@ void RISCVIntrinsicManagerImpl::InitIntrinsicList() {
     ConstructedRISCVAndesVectorBuiltins = true;
     ConstructRVVIntrinsics(RVAndesVectorIntrinsicRecords,
                            IntrinsicKind::ANDES_VECTOR);
+  }
+  if (S.RISCV().DeclareZvvmVectorBuiltins &&
+      !ConstructedRISCVZvvmVectorBuiltins) {
+    ConstructedRISCVZvvmVectorBuiltins = true;
+    ConstructRVVIntrinsics(RVZvvmVectorIntrinsicRecords,
+                           IntrinsicKind::ZVVM_VECTOR);
   }
 }
 
