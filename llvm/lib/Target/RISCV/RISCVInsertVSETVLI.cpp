@@ -179,6 +179,52 @@ void RISCVInsertVSETVLI::insertVSETVLI(MachineBasicBlock &MBB,
     return;
   }
 
+  // Zvvm matrix vtype state must be preserved: vsetvli (11-bit immediate)
+  // cannot encode the high-end matrix fields, so we emit the register-form
+  // PseudoVSETVL_MATRIX. This requires AVL to be in a GPR — the existing
+  // PseudoVSETIVLI / PseudoVSETVLIX0 paths (immediate AVL / VLMAX) are not
+  // yet covered; falling through to those would silently clear lambda /
+  // altfmt_A / altfmt_B, so we materialize an AVL register here as needed.
+  if (Info.hasMatrixState()) {
+    Register AVLReg;
+    if (Info.hasAVLReg()) {
+      AVLReg = Info.getAVLReg();
+      MRI->constrainRegClass(AVLReg, &RISCV::GPRNoX0RegClass);
+    } else if (Info.hasAVLImm()) {
+      AVLReg = MRI->createVirtualRegister(&RISCV::GPRNoX0RegClass);
+      auto LI = BuildMI(MBB, InsertPt, DL, TII->get(RISCV::ADDI), AVLReg)
+                    .addReg(RISCV::X0)
+                    .addImm(Info.getAVLImm());
+      if (LIS) {
+        LIS->InsertMachineInstrInMaps(*LI);
+        LIS->createAndComputeVirtRegInterval(AVLReg);
+      }
+    } else {
+      assert(Info.hasAVLVLMAX() && "Unexpected AVL state for matrix vsetvl");
+      // VLMAX with matrix state: materialize -1 (which the hardware treats
+      // as VLMAX in vsetvl) into an AVL register.
+      AVLReg = MRI->createVirtualRegister(&RISCV::GPRNoX0RegClass);
+      auto LI = BuildMI(MBB, InsertPt, DL, TII->get(RISCV::ADDI), AVLReg)
+                    .addReg(RISCV::X0)
+                    .addImm(-1);
+      if (LIS) {
+        LIS->InsertMachineInstrInMaps(*LI);
+        LIS->createAndComputeVirtRegInterval(AVLReg);
+      }
+    }
+
+    Register DestReg = MRI->createVirtualRegister(&RISCV::GPRRegClass);
+    auto MI = BuildMI(MBB, InsertPt, DL, TII->get(RISCV::PseudoVSETVL_MATRIX))
+                  .addReg(DestReg, RegState::Define | RegState::Dead)
+                  .addReg(AVLReg)
+                  .addImm(Info.encodeMatrixVTYPE(ST->getXLen()));
+    if (LIS) {
+      LIS->InsertMachineInstrInMaps(*MI);
+      LIS->createAndComputeVirtRegInterval(DestReg);
+    }
+    return;
+  }
+
   if (PrevInfo.isValid() && !PrevInfo.isUnknown()) {
     // Use X0, X0 form if the AVL is the same and the SEW+LMUL gives the same
     // VLMAX.
@@ -373,6 +419,10 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
             IncomingInfo.getMaskAgnostic(),
         (Demanded.AltFmt ? IncomingInfo : Info).getAltFmt(),
         Demanded.TWiden ? IncomingInfo.getTWiden() : 0);
+    // Zvvm matrix fields are preserved automatically: setVTYPE(6 args)
+    // leaves them alone, and computeInfoForInstr for non-matrix-vsetvl
+    // pseudos never sets them. Background matrix state therefore survives
+    // here without explicit threading.
   }
 }
 
@@ -815,6 +865,14 @@ void RISCVInsertVSETVLI::coalesceVSETVLIs(MachineBasicBlock &MBB) const {
     // TODO: Support XSfmm.
     if (RISCVII::hasTWidenOp(MI.getDesc().TSFlags) ||
         RISCVInstrInfo::isXSfmmVectorConfigInstr(MI)) {
+      NextMI = nullptr;
+      continue;
+    }
+    // Zvvm register-form vsetvl carries an XLen-wide vtype immediate whose
+    // matrix fields lie outside the 11-bit window that areCompatibleVTYPEs
+    // considers. Coalescing it with a standard PseudoVSETVLI would silently
+    // drop those matrix bits. Treat it like XSfmm: bail out from coalescing.
+    if (MI.getOpcode() == RISCV::PseudoVSETVL_MATRIX) {
       NextMI = nullptr;
       continue;
     }
