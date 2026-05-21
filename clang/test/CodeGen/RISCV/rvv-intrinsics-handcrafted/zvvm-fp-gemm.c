@@ -6,15 +6,13 @@
 // RUN:   -O2 -emit-llvm %s -o - | FileCheck %s
 //
 // End-to-end test that the Phase-1 Zvvfmm Clang builtin (vfmmacc_vv) composes
-// with the existing Phase-2 Zvvm builtins (vsetvl_matrix, vmtl_v, vmts_v) into
-// a small FP32 GEMM kernel. Geometry: SEW=32, LMUL=1, lambda=2 — the same
+// with the Phase-2 Zvvm builtins (vsetvl_matrix, vmtl_v, vmts_v) into a small
+// FP32 GEMM kernel. Geometry: SEW=32, LMUL=1, lambda=2 — the same
 // (SEW, LMUL, lambda) tuple the integer GEMM test pins.
 //
-// The Phase-1 tile load/store Clang builtins only expose Int32 (vmtl_v_i32m1
-// / vmts_v_i32m1). FP tile LS coverage is deferred to a follow-up; until
-// then this test bridges the integer load/store path to the FP MAC via
-// __riscv_vreinterpret_v_i32m1_f32m1 / _v_f32m1_i32m1, which both lower to a
-// no-op IR bitcast (same vreg, just retyped).
+// Tile load/store now exposes the f32m1 element type natively, so the kernel
+// drives __riscv_vmtl_v_f32m1 / __riscv_vmts_v_f32m1 directly without an
+// integer-bridge vreinterpret.
 
 #pragma clang riscv intrinsic zvvm_vector
 
@@ -28,16 +26,17 @@
 // can therefore be loaded with the order-preserving vmtl.v.
 
 // All four IR intrinsic calls survive -O2 inlining; the optimizer reorders
-// the basic blocks, so use CHECK-DAG to match them in any order. We pin the
-// FP-specific overload (.nxv2f32) on the vfmmacc call so that an accidental
-// regression to the integer vmmacc would fail the test.
+// the basic blocks, so use CHECK-DAG to match them in any order. The
+// .nxv2f32 overloads pin the kernel to the FP path end-to-end, so an
+// accidental regression to either the integer vmmacc or an integer tile LS
+// path would fail the test.
 //
 // CHECK-LABEL: define dso_local void @gemm_f32
 // CHECK-DAG:     call i64 @llvm.riscv.vsetvl.matrix.i64
-// CHECK-DAG:     call <vscale x 2 x i32> @llvm.riscv.vmtl.nxv2i32
-// CHECK-DAG:     call <vscale x 2 x i32> @llvm.riscv.vmtl.nxv2i32
+// CHECK-DAG:     call <vscale x 2 x float> @llvm.riscv.vmtl.nxv2f32
+// CHECK-DAG:     call <vscale x 2 x float> @llvm.riscv.vmtl.nxv2f32
 // CHECK-DAG:     call <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv2f32.i64
-// CHECK-DAG:     call void @llvm.riscv.vmts.nxv2i32
+// CHECK-DAG:     call void @llvm.riscv.vmts.nxv2f32
 void gemm_f32(const float *A, const float *B, float *C,
               size_t M, size_t N, size_t K,
               size_t lda, size_t ldb, size_t ldc) {
@@ -64,20 +63,14 @@ void gemm_f32(const float *A, const float *B, float *C,
       // Zero the FP C accumulator tile.
       vfloat32m1_t c = __riscv_vfmv_v_f_f32m1(0.0f, vl);
 
-      // Inner K loop. The bit-reinterpret pair stays inside the loop so the
-      // optimizer can fold each pair into a no-op on the vreg.
+      // Inner K loop.
       for (size_t k = 0; k < K; k += K_eff) {
-        vint32m1_t   ai = __riscv_vmtl_v_i32m1((const int32_t *)&A[i * lda + k],
-                                               lda, vl);
-        vint32m1_t   bi = __riscv_vmtl_v_i32m1((const int32_t *)&B[j * ldb + k],
-                                               ldb, vl);
-        vfloat32m1_t a  = __riscv_vreinterpret_v_i32m1_f32m1(ai);
-        vfloat32m1_t b  = __riscv_vreinterpret_v_i32m1_f32m1(bi);
+        vfloat32m1_t a = __riscv_vmtl_v_f32m1(&A[i * lda + k], lda, vl);
+        vfloat32m1_t b = __riscv_vmtl_v_f32m1(&B[j * ldb + k], ldb, vl);
         c = __riscv_vfmmacc_vv_f32m1(c, a, b, vl);
       }
 
-      __riscv_vmts_v_i32m1((int32_t *)&C[i * ldc + j], ldc,
-                           __riscv_vreinterpret_v_f32m1_i32m1(c), vl);
+      __riscv_vmts_v_f32m1(&C[i * ldc + j], ldc, c, vl);
     }
 
     j += N_tile;
