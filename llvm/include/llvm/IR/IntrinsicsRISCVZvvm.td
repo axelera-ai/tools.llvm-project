@@ -8,8 +8,9 @@
 //
 // This file defines the LLVM IR intrinsics for the RISC-V Integrated Matrix
 // Extension (Zvvm family). Currently covers Zvvmm (integer matrix multiply-
-// accumulate), Zvvmtls (order-preserving tile load/store), and Zvvmttls
-// (transposing tile load/store).
+// accumulate), Zvvfmm (floating-point matrix multiply-accumulate), Zvvmtls
+// (order-preserving tile load/store), and Zvvmttls (transposing tile
+// load/store).
 //
 //===----------------------------------------------------------------------===//
 
@@ -90,6 +91,21 @@ let TargetPrefix = "riscv" in {
   def int_riscv_vwmmacc  : RISCVMatrixMAC; // W = 2
   def int_riscv_vqmmacc  : RISCVMatrixMAC; // W = 4
   def int_riscv_v8wmmacc : RISCVMatrixMAC; // W = 8
+
+  // Zvvfmm: floating-point matrix multiply-accumulate. Same operand shape as
+  // RISCVMatrixMAC: (C, A, B, vl) -> C, with A and B sharing one IR vector
+  // type and C an independent IR vector type. The IR types carry only width
+  // (SEW) and LMUL; FP format selection (FP16 vs BF16 at 16-bit; E4M3 vs E5M2
+  // at 8-bit) lives in vtype.altfmt_A / vtype.altfmt_B and must be programmed
+  // via vsetvl_matrix before the call.
+  //
+  // vm is hardcoded to 1 (unscaled) at the encoding layer in Phase 1. The
+  // spec uses vm=0 to select microscaled (MX*) operation with paired E8M0
+  // scale factors in v0 — not exposed as IR intrinsics yet.
+  def int_riscv_vfmmacc   : RISCVMatrixMAC; // W = 1
+  def int_riscv_vfwmmacc  : RISCVMatrixMAC; // W = 2
+  def int_riscv_vfqmmacc  : RISCVMatrixMAC; // W = 4
+  def int_riscv_vf8wmmacc : RISCVMatrixMAC; // W = 8
 
   //===--------------------------------------------------------------------===//
   // Tile load/store (Zvvmtls / Zvvmttls).

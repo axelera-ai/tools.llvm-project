@@ -1,0 +1,92 @@
+; RUN: sed 's/iXLen/i32/g' %s \
+; RUN:   | llc -mtriple=riscv32 \
+; RUN:        -mattr=+v,+zvfh,+zve64d,+experimental-zvvfmm \
+; RUN:        -verify-machineinstrs | FileCheck %s
+; RUN: sed 's/iXLen/i64/g' %s \
+; RUN:   | llc -mtriple=riscv64 \
+; RUN:        -mattr=+v,+zvfh,+zve64d,+experimental-zvvfmm \
+; RUN:        -verify-machineinstrs | FileCheck %s
+
+; Zvvfmm floating-point matrix multiply-accumulate intrinsics.
+;
+; Phase 1 does not integrate with RISCVInsertVSETVLI, so no vsetvli is emitted
+; for these intrinsics; the caller is responsible for programming vtype
+; (SEW, LMUL, lambda, altfmt_A/altfmt_B) via vsetvl before invoking the MAC.
+; The tests therefore only verify the mnemonic, source registers, and
+; tied-operand constraint ($vd = $vd_wb).
+;
+; OFP8 inputs at LMUL=1 use the nxv8i8 IR container — LLVM has no first-class
+; FP8 vector type for E4M3 / E5M2, and vtype.altfmt selects the FP8
+; interpretation at execution time. This mirrors the integer Mm-acc IR types.
+
+declare <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv2f32(
+  <vscale x 2 x float>, <vscale x 2 x float>, <vscale x 2 x float>, iXLen)
+
+define <vscale x 2 x float> @test_vfmmacc_nxv2f32(<vscale x 2 x float> %c,
+                                                  <vscale x 2 x float> %a,
+                                                  <vscale x 2 x float> %b,
+                                                  iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_nxv2f32:
+; CHECK:       vfmmacc.vv v8, v9, v10
+; CHECK:       ret
+  %r = call <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv2f32(
+    <vscale x 2 x float> %c,
+    <vscale x 2 x float> %a,
+    <vscale x 2 x float> %b,
+    iXLen %vl)
+  ret <vscale x 2 x float> %r
+}
+
+declare <vscale x 2 x float> @llvm.riscv.vfwmmacc.nxv2f32.nxv4f16(
+  <vscale x 2 x float>, <vscale x 4 x half>, <vscale x 4 x half>, iXLen)
+
+define <vscale x 2 x float> @test_vfwmmacc_nxv2f32(<vscale x 2 x float> %c,
+                                                   <vscale x 4 x half> %a,
+                                                   <vscale x 4 x half> %b,
+                                                   iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfwmmacc_nxv2f32:
+; CHECK:       vfwmmacc.vv v8, v9, v10
+; CHECK:       ret
+  %r = call <vscale x 2 x float> @llvm.riscv.vfwmmacc.nxv2f32.nxv4f16(
+    <vscale x 2 x float> %c,
+    <vscale x 4 x half> %a,
+    <vscale x 4 x half> %b,
+    iXLen %vl)
+  ret <vscale x 2 x float> %r
+}
+
+declare <vscale x 2 x float> @llvm.riscv.vfqmmacc.nxv2f32.nxv8i8(
+  <vscale x 2 x float>, <vscale x 8 x i8>, <vscale x 8 x i8>, iXLen)
+
+define <vscale x 2 x float> @test_vfqmmacc_nxv2f32(<vscale x 2 x float> %c,
+                                                   <vscale x 8 x i8> %a,
+                                                   <vscale x 8 x i8> %b,
+                                                   iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfqmmacc_nxv2f32:
+; CHECK:       vfqmmacc.vv v8, v9, v10
+; CHECK:       ret
+  %r = call <vscale x 2 x float> @llvm.riscv.vfqmmacc.nxv2f32.nxv8i8(
+    <vscale x 2 x float> %c,
+    <vscale x 8 x i8> %a,
+    <vscale x 8 x i8> %b,
+    iXLen %vl)
+  ret <vscale x 2 x float> %r
+}
+
+declare <vscale x 1 x double> @llvm.riscv.vf8wmmacc.nxv1f64.nxv8i8(
+  <vscale x 1 x double>, <vscale x 8 x i8>, <vscale x 8 x i8>, iXLen)
+
+define <vscale x 1 x double> @test_vf8wmmacc_nxv1f64(<vscale x 1 x double> %c,
+                                                     <vscale x 8 x i8> %a,
+                                                     <vscale x 8 x i8> %b,
+                                                     iXLen %vl) nounwind {
+; CHECK-LABEL: test_vf8wmmacc_nxv1f64:
+; CHECK:       vf8wmmacc.vv v8, v9, v10
+; CHECK:       ret
+  %r = call <vscale x 1 x double> @llvm.riscv.vf8wmmacc.nxv1f64.nxv8i8(
+    <vscale x 1 x double> %c,
+    <vscale x 8 x i8> %a,
+    <vscale x 8 x i8> %b,
+    iXLen %vl)
+  ret <vscale x 1 x double> %r
+}
