@@ -22,10 +22,11 @@
 //                     only. (Widening vfwmmacc/vfqmmacc/vf8wmmacc share the
 //                     same EMUL_C ≠ LMUL machinery gap as the integer widening
 //                     variants and land in the same follow-up.)
-//   * vmtl_v / vmts_v — order-preserving tile load/store, default-lambda
-//                       unmasked, SEW=32 LMUL=1 only. (Lambda override _L{N},
-//                       masked variants, and the transposing vmttl/vmtts
-//                       mnemonics land in follow-ups.)
+//   * vmtl_v / vmts_v   — order-preserving tile load / store (Zvvmtls).
+//   * vmttl_v / vmtts_v — transposing tile load / store (Zvvmttls).
+//     All four cover LMUL=1, default-lambda unmasked, every element type at
+//     i8/i16/i32/i64/f16/f32/f64. (Lambda override _L{N} and masked variants
+//     land in follow-ups.)
 //
 //===----------------------------------------------------------------------===//
 
@@ -117,38 +118,61 @@ let RequiredFeatures = ["experimental-zvvfmm"],
 }
 
 //===----------------------------------------------------------------------===//
-// Zvvmtls: order-preserving tile load and store.
+// Zvvmtls / Zvvmttls: tile load and store.
 //
-// Generated C signatures for TypeRange "i", LMUL=1 (default lambda override):
-//   vint32m1_t __riscv_vmtl_v_i32m1(const int32_t *base, size_t ld, size_t vl);
-//   void       __riscv_vmts_v_i32m1(int32_t *base, size_t ld,
-//                                   vint32m1_t vs3, size_t vl);
+// Four mnemonics, each at LMUL=1 over TypeRange "csilxfd":
+//   vmtl.v  — order-preserving load  (Zvvmtls)
+//   vmts.v  — order-preserving store (Zvvmtls)
+//   vmttl.v — transposing load       (Zvvmttls)
+//   vmtts.v — transposing store      (Zvvmttls)
 //
-// Per-instruction lambda override (_L{N} variants) and masked variants are
-// added in follow-up patches.
+// Generated C signatures (one per element type, e.g. i32m1 shown):
+//   vint32m1_t __riscv_vmtl_v_i32m1 (const int32_t *base, size_t ld, size_t vl);
+//   vint32m1_t __riscv_vmttl_v_i32m1(const int32_t *base, size_t ld, size_t vl);
+//   void       __riscv_vmts_v_i32m1 (int32_t *base, size_t ld,
+//                                    vint32m1_t vs3, size_t vl);
+//   void       __riscv_vmtts_v_i32m1(int32_t *base, size_t ld,
+//                                    vint32m1_t vs3, size_t vl);
+//
+// The instruction encoding is element-type-agnostic — SEW lives in vtype —
+// so every LMUL=1 element type maps to the same pseudo with the matching IR
+// overload. Per-instruction lambda override (_L{N} variants) and masked
+// variants are not exposed yet; they land in follow-up patches.
 //===----------------------------------------------------------------------===//
 
 // Tile load: passthru is poisoned for unmasked builds (standard RVV pattern
 // for tail-undisturbed); the IR intrinsic threads it through arg 0.
-let RequiredFeatures = ["experimental-zvvmtls"],
-    HasMasked = false,
+let HasMasked = false,
     UnMaskedPolicyScheme = HasPassthruOperand,
-    Log2LMUL = [0],
-    Name = "vmtl_v",
-    IRName = "vmtl" in
-  def vmtl_v : RVVOutOp0Builtin<"v", "vPCez", "i">;
+    Log2LMUL = [0] in {
+  let RequiredFeatures = ["experimental-zvvmtls"],
+      Name = "vmtl_v",
+      IRName = "vmtl" in
+    def vmtl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+
+  let RequiredFeatures = ["experimental-zvvmttls"],
+      Name = "vmttl_v",
+      IRName = "vmttl" in
+    def vmttl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+}
 
 // Tile store: builtin order is (ptr, ld, vec, vl), IR intrinsic order is
 // (vec, ptr, ld, vl). Rotate to match the IR shape.
-let RequiredFeatures = ["experimental-zvvmtls"],
-    HasMasked = false,
+let HasMasked = false,
     Log2LMUL = [0],
-    Name = "vmts_v",
-    IRName = "vmts",
     ManualCodegen = [{
       // Builtin: (ptr, ld, value, vl). Intrinsic: (value, ptr, ld, vl).
       std::rotate(Ops.begin(), Ops.begin() + 2, Ops.begin() + 3);
       IntrinsicTypes = {Ops[0]->getType(), Ops[1]->getType(),
                         Ops[2]->getType()};
-    }] in
-  def vmts_v : RVVBuiltin<"v", "0Pezv", "i">;
+    }] in {
+  let RequiredFeatures = ["experimental-zvvmtls"],
+      Name = "vmts_v",
+      IRName = "vmts" in
+    def vmts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+
+  let RequiredFeatures = ["experimental-zvvmttls"],
+      Name = "vmtts_v",
+      IRName = "vmtts" in
+    def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+}
