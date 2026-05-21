@@ -7,8 +7,9 @@
 //===----------------------------------------------------------------------===//
 //
 // This file describes the RISC-V Integrated Matrix Extension (Zvvm family).
-// Covers Zvvmm (integer matrix multiply-accumulate), Zvvmtls (order-preserving
-// tile load/store), and Zvvmttls (transposing tile load/store).
+// Covers Zvvmm (integer matrix multiply-accumulate), Zvvfmm (floating-point
+// matrix multiply-accumulate), Zvvmtls (order-preserving tile load/store),
+// and Zvvmttls (transposing tile load/store).
 //
 // Caller responsibility: vtype must be configured (SEW, LMUL, lambda,
 // altfmt_A/altfmt_B) via vsetvl prior to invoking these instructions. The
@@ -24,17 +25,26 @@
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 // op vd, vs1, vs2
 //   vd is read-modified-written (tied operand).
-//   vm is hardcoded to 1 (matrix multiply-accumulate is never masked).
+//   vm is hardcoded to 1: for integer Mm-acc the encoding requires it; for
+//   FP Mm-acc the spec uses vm=0 to switch to microscaled MX* operation,
+//   which Phase 1 does not expose.
 // Encoding (OP-V major opcode):
 //   [31:26] = funct6, [25] = 1, [24:20] = vs2, [19:15] = vs1,
-//   [14:12] = OPIVV (000), [11:7] = vd, [6:0] = OP-V (0b1010111).
-class RVInstVMatrixMAC<bits<6> funct6, string opcodestr>
-    : RVInstVV<funct6, OPIVV, (outs VR:$vd_wb),
+//   [14:12] = OPIVV (000) for integer / OPFVV (001) for FP, [11:7] = vd,
+//   [6:0] = OP-V (0b1010111).
+class RVInstVMatrixMACOp<bits<6> funct6, RISCVVFormat opv, string opcodestr>
+    : RVInstVV<funct6, opv, (outs VR:$vd_wb),
                (ins VR:$vd, VR:$vs1, VR:$vs2),
                opcodestr, "$vd, $vs1, $vs2"> {
   let vm = 1;
   let Constraints = "$vd = $vd_wb";
 }
+
+class RVInstVMatrixMAC<bits<6> funct6, string opcodestr>
+    : RVInstVMatrixMACOp<funct6, OPIVV, opcodestr>;
+
+class RVInstVFMatrixMAC<bits<6> funct6, string opcodestr>
+    : RVInstVMatrixMACOp<funct6, OPFVV, opcodestr>;
 } // hasSideEffects = 0, mayLoad = 0, mayStore = 0
 
 //===----------------------------------------------------------------------===//
@@ -108,6 +118,75 @@ def : Pat<(nxv1i64 (int_riscv_v8wmmacc (nxv1i64 VR:$vd),
                                        (XLenVT GPRNoX0:$vl))),
           (PseudoV8WMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
 } // Predicates = [HasStdExtZvvmm]
+
+//===----------------------------------------------------------------------===//
+// Zvvfmm: floating-point matrix multiply-accumulate.
+//
+// Encoding bits per the IME spec's per-instruction wavedrom blocks:
+//   vfmmacc.vv    funct6 = 0b010100 (0x14)
+//   vfwmmacc.vv   funct6 = 0b010101 (0x15)
+//   vfqmmacc.vv   funct6 = 0b010110 (0x16)
+//   vf8wmmacc.vv  funct6 = 0b010111 (0x17)
+// All share funct3 = OPFVV (0b001) and have vm hardcoded to 1 (Phase 1 does
+// not encode the vm=0 microscaled MX* form).
+//===----------------------------------------------------------------------===//
+
+let Predicates = [HasStdExtZvvfmm] in {
+def VFMMACC_VV   : RVInstVFMatrixMAC<0b010100, "vfmmacc.vv">;
+def VFWMMACC_VV  : RVInstVFMatrixMAC<0b010101, "vfwmmacc.vv">;
+def VFQMMACC_VV  : RVInstVFMatrixMAC<0b010110, "vfqmmacc.vv">;
+def VF8WMMACC_VV : RVInstVFMatrixMAC<0b010111, "vf8wmmacc.vv">;
+} // Predicates = [HasStdExtZvvfmm]
+
+let Predicates = [HasStdExtZvvfmm] in {
+def PseudoVFMMACC_VV   : PseudoVMatrixMAC<VFMMACC_VV>;
+def PseudoVFWMMACC_VV  : PseudoVMatrixMAC<VFWMMACC_VV>;
+def PseudoVFQMMACC_VV  : PseudoVMatrixMAC<VFQMMACC_VV>;
+def PseudoVF8WMMACC_VV : PseudoVMatrixMAC<VF8WMMACC_VV>;
+} // Predicates = [HasStdExtZvvfmm]
+
+// ISel patterns for the FP MACs. Phase 1 lowers each intrinsic for one
+// representative (SEW, EMUL_C=LMUL=1) shape. Broader (SEW, LMUL) coverage —
+// and the architecturally-trickier EMUL_C ≠ LMUL coverage — lands alongside
+// the integer-side widening builtins in a follow-up.
+//
+// Type choices below mirror the integer side's container convention: when the
+// IR has no first-class FP type for an element width (OFP8 / E4M3 / E5M2), we
+// use the integer container (nxv8i8) and rely on vtype.altfmt to select the
+// FP8 interpretation at execution time.
+let Predicates = [HasStdExtZvvfmm] in {
+// W=1: SEW(C) = SEW(A) = SEW(B) = 32, FP32 accumulator and FP32 inputs.
+def : Pat<(nxv2f32 (int_riscv_vfmmacc (nxv2f32 VR:$vd),
+                                      (nxv2f32 VR:$vs1),
+                                      (nxv2f32 VR:$vs2),
+                                      (XLenVT GPRNoX0:$vl))),
+          (PseudoVFMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+
+// W=2: SEW(C) = 32, EEW(A) = EEW(B) = 16, FP16 inputs to FP32 accumulator.
+// BF16 input (altfmt_A/B = 1) reuses the same IR type at LMUL=1; format
+// disambiguation happens at vsetvl-time, so no additional ISel pattern is
+// required.
+def : Pat<(nxv2f32 (int_riscv_vfwmmacc (nxv2f32 VR:$vd),
+                                       (nxv4f16 VR:$vs1),
+                                       (nxv4f16 VR:$vs2),
+                                       (XLenVT GPRNoX0:$vl))),
+          (PseudoVFWMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+
+// W=4: SEW(C) = 32, EEW(A) = EEW(B) = 8, OFP8 inputs to FP32 accumulator.
+// OFP8 has no first-class IR FP type — use the integer container (nxv8i8).
+def : Pat<(nxv2f32 (int_riscv_vfqmmacc (nxv2f32 VR:$vd),
+                                       (nxv8i8 VR:$vs1),
+                                       (nxv8i8 VR:$vs2),
+                                       (XLenVT GPRNoX0:$vl))),
+          (PseudoVFQMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+
+// W=8: SEW(C) = 64, EEW(A) = EEW(B) = 8, OFP8 inputs to FP64 accumulator.
+def : Pat<(nxv1f64 (int_riscv_vf8wmmacc (nxv1f64 VR:$vd),
+                                        (nxv8i8 VR:$vs1),
+                                        (nxv8i8 VR:$vs2),
+                                        (XLenVT GPRNoX0:$vl))),
+          (PseudoVF8WMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+} // Predicates = [HasStdExtZvvfmm]
 
 //===----------------------------------------------------------------------===//
 // Pseudo for the register-form `vsetvl` with a full XLen vtype immediate.

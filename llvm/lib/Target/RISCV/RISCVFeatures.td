@@ -771,6 +771,25 @@ def HasStdExtZvvmttls : Predicate<"Subtarget->hasStdExtZvvmttls()">,
                         AssemblerPredicate<(all_of FeatureStdExtZvvmttls),
                             "'Zvvmttls' (Transposing Matrix Tile Load/Store)">;
 
+// Zvvfmm is the IME spec's umbrella name for the floating-point matrix
+// multiply-accumulate family (vfmmacc.vv and the widening variants). The spec
+// defines per-element-type sub-extensions (Zvvfp32mm, Zvvfp16mm, Zvvbf16mm,
+// Zvvfp64mm, Zvvofp8mm, plus widening combinations like Zvvfp16fp32mm) that
+// gate specific (SEW, altfmt) combinations of these mnemonics. At the LLVM
+// feature-flag layer we collapse those to a single umbrella for now, mirroring
+// how Zvvmm gates all four integer Mm-acc instructions in one shot. Whether a
+// given (SEW, altfmt) is legal on real hardware is a runtime property of vtype
+// the caller is responsible for; vsetvl-matrix programs it. Per-sub-extension
+// LLVM features can be added later when there's demand to constrain -march to
+// a single FP MAC sub-extension.
+def FeatureStdExtZvvfmm
+    : RISCVExperimentalExtension<0, 1,
+                                 "Floating-Point Matrix Multiply-Accumulate",
+                                 [FeatureStdExtZve32f]>;
+def HasStdExtZvvfmm : Predicate<"Subtarget->hasStdExtZvvfmm()">,
+                      AssemblerPredicate<(all_of FeatureStdExtZvvfmm),
+                          "'Zvvfmm' (Floating-Point Matrix Multiply-Accumulate)">;
+
 // Vector Cryptography and Bitmanip Extensions
 
 def FeatureStdExtZvkb
