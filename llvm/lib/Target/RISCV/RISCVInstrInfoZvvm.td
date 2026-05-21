@@ -436,40 +436,53 @@ let Predicates = [HasStdExtZvvmttls] in {
 //===----------------------------------------------------------------------===//
 // ISel patterns: intrinsic -> pseudo.
 //
-// Phase 2 emits one pattern per intrinsic for a single representative
-// (SEW, LMUL) combination (nxv2i32 = vint32m1_t). Additional coverage comes
-// when we scale the multiclass machinery in a follow-up.
+// The tile load/store instructions are element-type-agnostic at the encoding
+// layer — SEW comes from vtype.vsew and the only thing the IR vector type
+// affects in the backend is register-class selection (everything is in VR at
+// LMUL=1). We therefore emit one pattern per intrinsic per LMUL=1 element
+// type, for both the order-preserving (vmtl/vmts) and transposing (vmttl/
+// vmtts) mnemonics.
 //===----------------------------------------------------------------------===//
 
-class TileLoadPat<Intrinsic intr, Instruction pseudo, int lambdaVal>
-    : Pat<(nxv2i32 (intr (nxv2i32 VR:$passthru),
-                         GPR:$rs1,
-                         (XLenVT GPR:$rs2),
-                         (XLenVT GPRNoX0:$vl))),
+// LMUL=1 vector types the tile load/store builtins expose to Clang. The
+// corresponding mask types come from `vti.Mask` so the same class works for
+// every element width.
+defvar AllZvvmTileLSM1VTIs =
+    [VI8M1, VI16M1, VI32M1, VI64M1, VF16M1, VF32M1, VF64M1];
+
+class TileLoadPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
+                  VTypeInfo vti>
+    : Pat<(vti.Vector (intr (vti.Vector VR:$passthru),
+                            GPR:$rs1,
+                            (XLenVT GPR:$rs2),
+                            (XLenVT GPRNoX0:$vl))),
           (pseudo VR:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal, GPRNoX0:$vl)>;
 
-class TileLoadMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal>
-    : Pat<(nxv2i32 (intr (nxv2i32 VR:$passthru),
-                         GPR:$rs1,
-                         (XLenVT GPR:$rs2),
-                         (nxv2i1 VMV0:$mask),
-                         (XLenVT GPRNoX0:$vl),
-                         (XLenVT timm:$policy))),
+class TileLoadMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
+                      VTypeInfo vti>
+    : Pat<(vti.Vector (intr (vti.Vector VR:$passthru),
+                            GPR:$rs1,
+                            (XLenVT GPR:$rs2),
+                            (vti.Mask VMV0:$mask),
+                            (XLenVT GPRNoX0:$vl),
+                            (XLenVT timm:$policy))),
           (pseudo VR:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal,
                   VMV0:$mask, GPRNoX0:$vl, (XLenVT timm:$policy))>;
 
-class TileStorePat<Intrinsic intr, Instruction pseudo, int lambdaVal>
-    : Pat<(intr (nxv2i32 VR:$vs3),
+class TileStorePat<Intrinsic intr, Instruction pseudo, int lambdaVal,
+                   VTypeInfo vti>
+    : Pat<(intr (vti.Vector VR:$vs3),
                 GPR:$rs1,
                 (XLenVT GPR:$rs2),
                 (XLenVT GPRNoX0:$vl)),
           (pseudo VR:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal, GPRNoX0:$vl)>;
 
-class TileStoreMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal>
-    : Pat<(intr (nxv2i32 VR:$vs3),
+class TileStoreMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
+                       VTypeInfo vti>
+    : Pat<(intr (vti.Vector VR:$vs3),
                 GPR:$rs1,
                 (XLenVT GPR:$rs2),
-                (nxv2i1 VMV0:$mask),
+                (vti.Mask VMV0:$mask),
                 (XLenVT GPRNoX0:$vl)),
           (pseudo VR:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal,
                   VMV0:$mask, GPRNoX0:$vl)>;
@@ -488,28 +501,35 @@ foreach lsuf = ["", "_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
                       !eq(lsuf, "_l32"): 6,
                       !eq(lsuf, "_l64"): 7);
 
-  let Predicates = [HasStdExtZvvmtls] in {
-    def : TileLoadPat<
-        !cast<Intrinsic>("int_riscv_vmtl"#lsuf), PseudoVMTL_V, lval>;
-    def : TileLoadMaskPat<
-        !cast<Intrinsic>("int_riscv_vmtl"#lsuf#"_mask"),
-        PseudoVMTL_V_MASK, lval>;
-    def : TileStorePat<
-        !cast<Intrinsic>("int_riscv_vmts"#lsuf), PseudoVMTS_V, lval>;
-    def : TileStoreMaskPat<
-        !cast<Intrinsic>("int_riscv_vmts"#lsuf#"_mask"),
-        PseudoVMTS_V_MASK, lval>;
-  }
-  let Predicates = [HasStdExtZvvmttls] in {
-    def : TileLoadPat<
-        !cast<Intrinsic>("int_riscv_vmttl"#lsuf), PseudoVMTTL_V, lval>;
-    def : TileLoadMaskPat<
-        !cast<Intrinsic>("int_riscv_vmttl"#lsuf#"_mask"),
-        PseudoVMTTL_V_MASK, lval>;
-    def : TileStorePat<
-        !cast<Intrinsic>("int_riscv_vmtts"#lsuf), PseudoVMTTS_V, lval>;
-    def : TileStoreMaskPat<
-        !cast<Intrinsic>("int_riscv_vmtts"#lsuf#"_mask"),
-        PseudoVMTTS_V_MASK, lval>;
+  // FP element types pick up the matching scalar-FP+Zve* predicates from
+  // GetVTypeMinimalPredicates so the pattern is only available when the IR
+  // container type itself is legal.
+  foreach vti = AllZvvmTileLSM1VTIs in {
+    let Predicates = !listconcat([HasStdExtZvvmtls],
+                                 GetVTypeMinimalPredicates<vti>.Predicates) in {
+      def : TileLoadPat<
+          !cast<Intrinsic>("int_riscv_vmtl"#lsuf), PseudoVMTL_V, lval, vti>;
+      def : TileLoadMaskPat<
+          !cast<Intrinsic>("int_riscv_vmtl"#lsuf#"_mask"),
+          PseudoVMTL_V_MASK, lval, vti>;
+      def : TileStorePat<
+          !cast<Intrinsic>("int_riscv_vmts"#lsuf), PseudoVMTS_V, lval, vti>;
+      def : TileStoreMaskPat<
+          !cast<Intrinsic>("int_riscv_vmts"#lsuf#"_mask"),
+          PseudoVMTS_V_MASK, lval, vti>;
+    }
+    let Predicates = !listconcat([HasStdExtZvvmttls],
+                                 GetVTypeMinimalPredicates<vti>.Predicates) in {
+      def : TileLoadPat<
+          !cast<Intrinsic>("int_riscv_vmttl"#lsuf), PseudoVMTTL_V, lval, vti>;
+      def : TileLoadMaskPat<
+          !cast<Intrinsic>("int_riscv_vmttl"#lsuf#"_mask"),
+          PseudoVMTTL_V_MASK, lval, vti>;
+      def : TileStorePat<
+          !cast<Intrinsic>("int_riscv_vmtts"#lsuf), PseudoVMTTS_V, lval, vti>;
+      def : TileStoreMaskPat<
+          !cast<Intrinsic>("int_riscv_vmtts"#lsuf#"_mask"),
+          PseudoVMTTS_V_MASK, lval, vti>;
+    }
   }
 }
