@@ -8,7 +8,8 @@
 //
 // This file defines the Clang builtins for the RISC-V Integrated Matrix
 // Extension (Zvvm family): Zvvmm (integer matrix multiply-accumulate),
-// Zvvmtls (tile load/store), Zvvmttls (transposing tile load/store).
+// Zvvfmm (floating-point matrix multiply-accumulate), Zvvmtls (tile
+// load/store), Zvvmttls (transposing tile load/store).
 //
 // Spec: https://github.com/riscv/integrated-matrix-extension
 //
@@ -17,6 +18,10 @@
 //   * vmmacc_vv     — non-widening integer matrix multiply-accumulate, SEW=32
 //                     LMUL=1 only. (Widening variants and broader (SEW, LMUL)
 //                     coverage land in follow-up patches.)
+//   * vfmmacc_vv    — non-widening FP matrix multiply-accumulate, FP32 LMUL=1
+//                     only. (Widening vfwmmacc/vfqmmacc/vf8wmmacc share the
+//                     same EMUL_C ≠ LMUL machinery gap as the integer widening
+//                     variants and land in the same follow-up.)
 //   * vmtl_v / vmts_v — order-preserving tile load/store, default-lambda
 //                       unmasked, SEW=32 LMUL=1 only. (Lambda override _L{N},
 //                       masked variants, and the transposing vmttl/vmtts
@@ -77,6 +82,38 @@ let RequiredFeatures = ["experimental-zvvmm"],
   //   vint32m1_t __riscv_vmmacc_vv_i32m1(vint32m1_t vd, vint32m1_t vs1,
   //                                       vint32m1_t vs2, size_t vl);
   def vmmacc_vv : RVVBuiltin<"v", "vvvv", "i">;
+}
+
+//===----------------------------------------------------------------------===//
+// Zvvfmm: floating-point matrix multiply-accumulate.
+//
+// Matrix multiply-accumulate is never masked from the C surface: the
+// underlying encoding uses vm=1 (Phase 1 does not expose the vm=0 microscaled
+// MX* form). vta/vma come from vtype.
+//
+// Only the non-widening vfmmacc.vv is exposed at the Clang level in Phase 1.
+// The widening variants need vd (= EMUL_C) and vs1/vs2 (= LMUL) to be
+// independent — same EMUL_C ≠ LMUL gap that blocks the integer widening
+// builtins. They land alongside the integer widening builtins when that
+// coverage work is done.
+//===----------------------------------------------------------------------===//
+
+let RequiredFeatures = ["experimental-zvvfmm"],
+    HasMasked = false,
+    UnMaskedPolicyScheme = NonePolicy,
+    Log2LMUL = [0],
+    // The IR intrinsic has two independent vector-type overloads: C (the
+    // accumulator, == return type, index -1) and A/B (operand 1).
+    IntrinsicTypes = [-1, 1],
+    IRName = "vfmmacc" in {
+  // vfmmacc.vv — W = 1, A/B and C all have the same SEW.
+  //
+  // Generated C signature for TypeRange "f", LMUL=1:
+  //   vfloat32m1_t __riscv_vfmmacc_vv_f32m1(vfloat32m1_t vd,
+  //                                          vfloat32m1_t vs1,
+  //                                          vfloat32m1_t vs2,
+  //                                          size_t vl);
+  def vfmmacc_vv : RVVBuiltin<"v", "vvvv", "f">;
 }
 
 //===----------------------------------------------------------------------===//
