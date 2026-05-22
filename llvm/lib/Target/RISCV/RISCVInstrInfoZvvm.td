@@ -215,6 +215,36 @@ def PseudoVSETVL_MATRIX
       Sched<[WriteVSETVL, ReadVSETVL, ReadVSETVL]>;
 
 //===----------------------------------------------------------------------===//
+// Targeted lambda primitives.
+//
+// PseudoVSETLAMBDA: read-modify-write `vtype.lambda`. Expanded to a sequence
+// that reads current vtype, masks out the lambda bits, ORs in the new
+// encoding, reads current vl, emits a register-form `vsetvl` to commit the
+// updated vtype while preserving vl, and reads back the post-WARL-clamp
+// lambda field into $rd. The `$scratch` output exists only to give the
+// register allocator a second scratch register for the read-modify-write
+// sequence — its value is dead.
+//
+// PseudoQUERYLAMBDA: pure read of `vtype`. Extracts `vtype.lambda[2:0]` into
+// $rd. No vtype write, no scratch required.
+//===----------------------------------------------------------------------===//
+
+let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE],
+    Constraints = "@earlyclobber $rd,@earlyclobber $scratch" in
+def PseudoVSETLAMBDA
+    : Pseudo<(outs GPR:$rd, GPR:$scratch), (ins ixlenimm_li:$encoding), []>,
+      Sched<[WriteVSETVL, ReadVSETVL]>;
+
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Uses = [VTYPE] in
+def PseudoQUERYLAMBDA
+    : Pseudo<(outs GPR:$rd), (ins), []>;
+
+// ISel for int_riscv_vsetlambda / int_riscv_query_lambda is performed
+// manually in RISCVDAGToDAGISel::selectVSETLAMBDA / selectQUERYLAMBDA — the
+// multi-output PseudoVSETLAMBDA can't be expressed cleanly as a td pattern
+// because tblgen cannot infer the scratch output's type independent of $rd.
+
+//===----------------------------------------------------------------------===//
 // Tile load/store (Zvvmtls / Zvvmttls).
 //
 // Encoding (reuses the RVV LD/ST major-opcode space):
