@@ -61,6 +61,72 @@ let RequiredFeatures = ["experimental-zvvmm"],
   def vsetvl_matrix : RVVBuiltin<"", "zzKzKzKzKzKzKzKzKz", "i">;
 
 //===----------------------------------------------------------------------===//
+// Zvvm: targeted lambda primitive (spec §"Establishing lambda from C").
+//
+// Generated C signature:
+//   size_t __riscv_vsetlambda(size_t requested_lambda);
+//
+// `requested_lambda` is an integer constant expression in
+// {0, 1, 2, 4, 8, 16, 32, 64} (validated in SemaRISCV).
+//
+//   * 0     -> read-only query (does not modify vtype).
+//   * 1..64 -> writes vtype.lambda = encoding-of(L), preserves all other
+//              vtype fields and vl. Hardware may WARL-clamp; the returned
+//              value reflects the actually-established lambda.
+//
+// The return value is the established lambda in the same power-of-two form
+// (0 if not configured; otherwise one of 1, 2, 4, 8, 16, 32, 64).
+//
+// Implementation: this lowers to either int_riscv_query_lambda (L == 0) or
+// int_riscv_vsetlambda (L != 0). The IR intrinsics operate on the 3-bit
+// vtype.lambda encoding; the conversion between the user-facing power-of-two
+// value and the encoding happens entirely in IR-gen.
+//===----------------------------------------------------------------------===//
+
+let RequiredFeatures = ["experimental-zvvmm"],
+    SupportOverloading = false,
+    HasVL = false,
+    HasMasked = false,
+    Log2LMUL = [0],
+    Name = "vsetlambda",
+    OverloadedName = "vsetlambda",
+    IRName = "vsetlambda",
+    ManualCodegen = [{
+      {
+        // Ops[0] = requested_lambda (compile-time constant; validated by
+        // Sema).
+        auto *LConst = cast<llvm::ConstantInt>(Ops[0]);
+        uint64_t L = LConst->getZExtValue();
+
+        llvm::Value *EncResult;
+        if (L == 0) {
+          // Read-only query: no vtype write.
+          llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_query_lambda,
+                                               {ResultType});
+          EncResult = Builder.CreateCall(F);
+        } else {
+          // L is a power of two in {1,2,4,8,16,32,64}; the 3-bit encoding is
+          // ctz(L) + 1.
+          unsigned Encoding = llvm::Log2_64(L) + 1;
+          llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_vsetlambda,
+                                               {ResultType});
+          EncResult = Builder.CreateCall(
+              F, {llvm::ConstantInt::get(ResultType, Encoding)});
+        }
+
+        // Convert established encoding (0..7) back to the power-of-two form
+        // the user expects: enc == 0 ? 0 : 1 << (enc - 1).
+        llvm::Value *Zero = llvm::ConstantInt::get(ResultType, 0);
+        llvm::Value *One = llvm::ConstantInt::get(ResultType, 1);
+        llvm::Value *IsZero = Builder.CreateICmpEQ(EncResult, Zero);
+        llvm::Value *Shift = Builder.CreateSub(EncResult, One);
+        llvm::Value *POT = Builder.CreateShl(One, Shift);
+        return Builder.CreateSelect(IsZero, Zero, POT);
+      }
+    }] in
+  def vsetlambda : RVVBuiltin<"", "zKz", "i">;
+
+//===----------------------------------------------------------------------===//
 // Zvvmm: integer matrix multiply-accumulate
 //===----------------------------------------------------------------------===//
 
@@ -142,6 +208,11 @@ let RequiredFeatures = ["experimental-zvvfmm"],
 
 // Tile load: passthru is poisoned for unmasked builds (standard RVV pattern
 // for tail-undisturbed); the IR intrinsic threads it through arg 0.
+//
+// The default-lambda form (no suffix) uses vtype.lambda. The `_l{N}` variants
+// override vtype.lambda for the duration of the instruction via the per-
+// instruction Lλ field in the encoding; the matching IR intrinsics are
+// int_riscv_vmtl_l{1,2,4,8,16,32,64} and friends.
 let HasMasked = false,
     UnMaskedPolicyScheme = HasPassthruOperand,
     Log2LMUL = [0] in {
@@ -154,6 +225,19 @@ let HasMasked = false,
       Name = "vmttl_v",
       IRName = "vmttl" in
     def vmttl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+
+  // Per-lambda override variants.
+  foreach lsuf = ["_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
+    let RequiredFeatures = ["experimental-zvvmtls"],
+        Name = "vmtl_v" # lsuf,
+        IRName = "vmtl" # lsuf in
+      def : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+
+    let RequiredFeatures = ["experimental-zvvmttls"],
+        Name = "vmttl_v" # lsuf,
+        IRName = "vmttl" # lsuf in
+      def : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+  }
 }
 
 // Tile store: builtin order is (ptr, ld, vec, vl), IR intrinsic order is
@@ -175,4 +259,17 @@ let HasMasked = false,
       Name = "vmtts_v",
       IRName = "vmtts" in
     def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+
+  // Per-lambda override variants for stores.
+  foreach lsuf = ["_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
+    let RequiredFeatures = ["experimental-zvvmtls"],
+        Name = "vmts_v" # lsuf,
+        IRName = "vmts" # lsuf in
+      def : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+
+    let RequiredFeatures = ["experimental-zvvmttls"],
+        Name = "vmtts_v" # lsuf,
+        IRName = "vmtts" # lsuf in
+      def : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+  }
 }

@@ -166,6 +166,8 @@ public:
 
   void selectVSETVLI(SDNode *Node);
   void selectVSETVLMatrix(SDNode *Node);
+  void selectVSETLAMBDA(SDNode *Node);
+  void selectQUERYLAMBDA(SDNode *Node);
   void selectXSfmmVSET(SDNode *Node);
 
   void selectSF_VC_X_SE(SDNode *Node);

@@ -57,6 +57,44 @@ let TargetPrefix = "riscv" in {
                                ImmArg<ArgIndex<5>>, ImmArg<ArgIndex<6>>,
                                ImmArg<ArgIndex<7>>, ImmArg<ArgIndex<8>>]>;
 
+  //===--------------------------------------------------------------------===//
+  // Targeted lambda primitives. These complement int_riscv_vsetvl_matrix for
+  // the common case where software wants to establish (or read) only the
+  // matrix `lambda` field of `vtype` without re-specifying the other vtype
+  // fields. The C-level wrapper is `__riscv_vsetlambda` (see the IME spec
+  // §"Establishing lambda from C").
+  //
+  // The intrinsics operate on the 3-bit `vtype.lambda` encoding directly
+  // (0 = not-configured / dynamic, 1..7 = L1, L2, L4, L8, L16, L32, L64).
+  // The user-facing power-of-two value (1, 2, 4, 8, 16, 32, 64) is converted
+  // to/from this encoding by the Clang IR-gen layer; keeping the IR shape in
+  // encoding form makes the pseudo-expansion branchless.
+  //===--------------------------------------------------------------------===//
+
+  // Write `vtype.lambda` to `encoding` (an ImmArg in 1..7) and return the
+  // post-WARL-clamp established encoding. Preserves SEW, LMUL, vta, vma, bs,
+  // altfmt_A, altfmt_B and vl per the spec contract.
+  //
+  // The encoding == 0 case (read-only query) is handled by the separate
+  // `int_riscv_query_lambda` intrinsic.
+  //
+  // IntrNoMem mirrors the int_riscv_vsetvli convention (vtype is not part of
+  // the IR memory model). At the machine level, the lowered pseudo carries
+  // Defs = [VL, VTYPE] which preserves ordering with respect to subsequent
+  // vector / matrix instructions through standard VL/VTYPE liveness.
+  def int_riscv_vsetlambda
+      : DefaultAttrsIntrinsic<[llvm_anyint_ty],
+                              [LLVMMatchType<0>], // encoding
+                              [IntrNoMem,
+                               ImmArg<ArgIndex<0>>,
+                               Range<ArgIndex<0>, 1, 8>]>;
+
+  // Read the current `vtype.lambda` encoding (0..7) without writing vtype.
+  // Pure read of `vtype`; the spec contract is that this intrinsic does not
+  // perturb any vtype state.
+  def int_riscv_query_lambda
+      : DefaultAttrsIntrinsic<[llvm_anyint_ty], [], [IntrNoMem]>;
+
   // Shape shared by all integer matrix multiply-accumulate intrinsics:
   //   (C, A, B, vl) -> C
   //

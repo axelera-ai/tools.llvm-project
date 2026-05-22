@@ -62,6 +62,10 @@ private:
                                          MachineBasicBlock::iterator MBBI);
   bool expandPseudoVSETVLMatrix(MachineBasicBlock &MBB,
                                 MachineBasicBlock::iterator MBBI);
+  bool expandPseudoVSETLAMBDA(MachineBasicBlock &MBB,
+                              MachineBasicBlock::iterator MBBI);
+  bool expandPseudoQUERYLAMBDA(MachineBasicBlock &MBB,
+                               MachineBasicBlock::iterator MBBI);
 #ifndef NDEBUG
   unsigned getInstSizeInBytes(const MachineFunction &MF) const {
     unsigned Size = 0;
@@ -196,6 +200,10 @@ bool RISCVExpandPseudo::expandMI(MachineBasicBlock &MBB,
     return expandPseudoReadVLENBViaVSETVLIX0(MBB, MBBI);
   case RISCV::PseudoVSETVL_MATRIX:
     return expandPseudoVSETVLMatrix(MBB, MBBI);
+  case RISCV::PseudoVSETLAMBDA:
+    return expandPseudoVSETLAMBDA(MBB, MBBI);
+  case RISCV::PseudoQUERYLAMBDA:
+    return expandPseudoQUERYLAMBDA(MBB, MBBI);
   }
 
   return false;
@@ -592,6 +600,119 @@ bool RISCVExpandPseudo::expandPseudoVSETVLMatrix(
       .addReg(Dst, RegState::Define)
       .addReg(AVL)
       .addReg(Dst);
+
+  MBBI->eraseFromParent();
+  return true;
+}
+
+// Expand a PseudoVSETLAMBDA: read-modify-write of the `vtype.lambda` field.
+// Sequence (XLEN = host XLEN, lambda field at vtype[XLEN-2:XLEN-4]):
+//   csrrs   Dst, vtype, x0          ; Dst = current vtype
+//   li      Scratch, 0x7
+//   slli    Scratch, Scratch, XLEN-4
+//   xori    Scratch, Scratch, -1    ; Scratch = ~(0x7 << (XLEN-4))  (mask)
+//   and     Dst, Dst, Scratch       ; clear current lambda bits
+//   li      Scratch, encoding       ; encoding is 1..7 (compile-time)
+//   slli    Scratch, Scratch, XLEN-4
+//   or      Dst, Dst, Scratch       ; install new lambda bits
+//   csrrs   Scratch, vl, x0         ; Scratch = current vl
+//   vsetvl  Scratch, Scratch, Dst   ; commit vtype = Dst, vl re-derived
+//   csrrs   Dst, vtype, x0          ; readback post-WARL vtype
+//   srli    Dst, Dst, XLEN-4        ; shift lambda field to bits [2:0]
+//   andi    Dst, Dst, 0x7           ; established encoding (return value)
+bool RISCVExpandPseudo::expandPseudoVSETLAMBDA(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI) {
+  DebugLoc DL = MBBI->getDebugLoc();
+  Register Dst = MBBI->getOperand(0).getReg();
+  Register Scratch = MBBI->getOperand(1).getReg();
+  int64_t Encoding = MBBI->getOperand(2).getImm();
+  unsigned XLen = STI->getXLen();
+  unsigned Shift = XLen - 4;
+
+  const unsigned VTypeCSR = 0xC21;
+  const unsigned VLCSR = 0xC20;
+
+  // Dst = csrr vtype
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::CSRRS), Dst)
+      .addImm(VTypeCSR)
+      .addReg(RISCV::X0);
+
+  // Materialize the lambda-bit-clearing mask into Scratch.
+  TII->movImm(MBB, MBBI, DL, Scratch, 0x7, MachineInstr::NoFlags,
+              /*DstRenamable=*/false, /*DstIsDead=*/false);
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::SLLI), Scratch)
+      .addReg(Scratch)
+      .addImm(Shift);
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::XORI), Scratch)
+      .addReg(Scratch)
+      .addImm(-1);
+
+  // Dst &= Scratch  (clear lambda bits).
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::AND), Dst)
+      .addReg(Dst)
+      .addReg(Scratch);
+
+  // Scratch = encoding << Shift.
+  TII->movImm(MBB, MBBI, DL, Scratch, Encoding, MachineInstr::NoFlags,
+              /*DstRenamable=*/false, /*DstIsDead=*/false);
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::SLLI), Scratch)
+      .addReg(Scratch)
+      .addImm(Shift);
+
+  // Dst |= Scratch  (install new lambda bits).
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::OR), Dst)
+      .addReg(Dst)
+      .addReg(Scratch);
+
+  // Scratch = csrr vl.
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::CSRRS), Scratch)
+      .addImm(VLCSR)
+      .addReg(RISCV::X0);
+
+  // vsetvl Scratch, Scratch, Dst   — commits vtype, re-derives vl from
+  // current vl (which the spec contract says hardware leaves unchanged).
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::VSETVL))
+      .addReg(Scratch, RegState::Define)
+      .addReg(Scratch)
+      .addReg(Dst);
+
+  // Dst = csrr vtype  (post-WARL readback).
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::CSRRS), Dst)
+      .addImm(VTypeCSR)
+      .addReg(RISCV::X0);
+
+  // Extract established lambda encoding into bits [2:0].
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::SRLI), Dst)
+      .addReg(Dst)
+      .addImm(Shift);
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::ANDI), Dst)
+      .addReg(Dst)
+      .addImm(0x7);
+
+  MBBI->eraseFromParent();
+  return true;
+}
+
+// Expand a PseudoQUERYLAMBDA: pure read of `vtype.lambda` (no write).
+//   csrrs   Dst, vtype, x0
+//   srli    Dst, Dst, XLEN-4
+//   andi    Dst, Dst, 0x7
+bool RISCVExpandPseudo::expandPseudoQUERYLAMBDA(
+    MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI) {
+  DebugLoc DL = MBBI->getDebugLoc();
+  Register Dst = MBBI->getOperand(0).getReg();
+  unsigned XLen = STI->getXLen();
+  unsigned Shift = XLen - 4;
+
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::CSRRS), Dst)
+      .addImm(0xC21)
+      .addReg(RISCV::X0);
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::SRLI), Dst)
+      .addReg(Dst)
+      .addImm(Shift);
+  BuildMI(MBB, MBBI, DL, TII->get(RISCV::ANDI), Dst)
+      .addReg(Dst)
+      .addImm(0x7);
 
   MBBI->eraseFromParent();
   return true;

@@ -696,6 +696,19 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
   case RISCVVector::BI__builtin_rvv_sf_vsettk:
     return SemaRef.BuiltinConstantArgRange(TheCall, 1, 0, 3) ||
            SemaRef.BuiltinConstantArgRange(TheCall, 2, 1, 3);
+  case RISCVVector::BI__builtin_rvv_vsetlambda: {
+    // Spec: requested_lambda must be 0 (query) or a power of two in
+    // {1, 2, 4, 8, 16, 32, 64}.
+    llvm::APSInt Result;
+    if (SemaRef.BuiltinConstantArg(TheCall, 0, Result))
+      return true;
+    int64_t L = Result.getSExtValue();
+    if (L < 0 || L > 64 || (L != 0 && !llvm::isPowerOf2_64(L)))
+      return Diag(TheCall->getArg(0)->getBeginLoc(),
+                  diag::err_riscv_builtin_invalid_lambda)
+             << TheCall->getArg(0)->getSourceRange();
+    return false;
+  }
   case RISCVVector::BI__builtin_rvv_sf_mm_f_f_w1:
   case RISCVVector::BI__builtin_rvv_sf_mm_f_f_w2:
   case RISCVVector::BI__builtin_rvv_sf_mm_e5m2_e4m3_w4:
