@@ -82,3 +82,80 @@ define <vscale x 1 x i64> @test_v8wmmacc_nxv1i64(<vscale x 1 x i64> %c,
     iXLen %vl)
   ret <vscale x 1 x i64> %r
 }
+
+; Non-widening vmmacc.vv at EMUL_C ≠ LMUL: vd register class is VR/VRM2/VRM4/
+; VRM8 per EMUL_C, vs1/vs2 register class is VR/VRM2/VRM4/VRM8 per LMUL — the
+; matrix MAC encoding stores only the base register number; vtype.LMUL drives
+; the actual register-group size at execution. Spot-check representative cells.
+
+declare <vscale x 4 x i32> @llvm.riscv.vmmacc.nxv4i32.nxv2i32(
+  <vscale x 4 x i32>, <vscale x 2 x i32>, <vscale x 2 x i32>, iXLen)
+
+define <vscale x 4 x i32> @test_vmmacc_m2_lm1(<vscale x 4 x i32> %c,
+                                              <vscale x 2 x i32> %a,
+                                              <vscale x 2 x i32> %b,
+                                              iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmmacc_m2_lm1:
+; CHECK:       vmmacc.vv v8, v10, v11
+; CHECK:       ret
+  %r = call <vscale x 4 x i32> @llvm.riscv.vmmacc.nxv4i32.nxv2i32(
+    <vscale x 4 x i32> %c,
+    <vscale x 2 x i32> %a,
+    <vscale x 2 x i32> %b,
+    iXLen %vl)
+  ret <vscale x 4 x i32> %r
+}
+
+declare <vscale x 2 x i32> @llvm.riscv.vmmacc.nxv2i32.nxv4i32(
+  <vscale x 2 x i32>, <vscale x 4 x i32>, <vscale x 4 x i32>, iXLen)
+
+define <vscale x 2 x i32> @test_vmmacc_m1_lm2(<vscale x 2 x i32> %c,
+                                              <vscale x 4 x i32> %a,
+                                              <vscale x 4 x i32> %b,
+                                              iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmmacc_m1_lm2:
+; CHECK:       vmmacc.vv v8, v10, v12
+; CHECK:       ret
+  %r = call <vscale x 2 x i32> @llvm.riscv.vmmacc.nxv2i32.nxv4i32(
+    <vscale x 2 x i32> %c,
+    <vscale x 4 x i32> %a,
+    <vscale x 4 x i32> %b,
+    iXLen %vl)
+  ret <vscale x 2 x i32> %r
+}
+
+declare <vscale x 8 x i32> @llvm.riscv.vmmacc.nxv8i32.nxv16i32(
+  <vscale x 8 x i32>, <vscale x 16 x i32>, <vscale x 16 x i32>, iXLen)
+
+define <vscale x 8 x i32> @test_vmmacc_m4_lm8(<vscale x 8 x i32> %c,
+                                              <vscale x 16 x i32> %a,
+                                              <vscale x 16 x i32> %b,
+                                              iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmmacc_m4_lm8:
+; CHECK:       vmmacc.vv v8, v16, v24
+; CHECK:       ret
+  %r = call <vscale x 8 x i32> @llvm.riscv.vmmacc.nxv8i32.nxv16i32(
+    <vscale x 8 x i32> %c,
+    <vscale x 16 x i32> %a,
+    <vscale x 16 x i32> %b,
+    iXLen %vl)
+  ret <vscale x 8 x i32> %r
+}
+
+declare <vscale x 16 x i32> @llvm.riscv.vmmacc.nxv16i32.nxv2i32(
+  <vscale x 16 x i32>, <vscale x 2 x i32>, <vscale x 2 x i32>, iXLen)
+
+define <vscale x 16 x i32> @test_vmmacc_m8_lm1(<vscale x 16 x i32> %c,
+                                               <vscale x 2 x i32> %a,
+                                               <vscale x 2 x i32> %b,
+                                               iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmmacc_m8_lm1:
+; CHECK:       vmmacc.vv v8, v16, v17
+; CHECK:       ret
+  %r = call <vscale x 16 x i32> @llvm.riscv.vmmacc.nxv16i32.nxv2i32(
+    <vscale x 16 x i32> %c,
+    <vscale x 2 x i32> %a,
+    <vscale x 2 x i32> %b,
+    iXLen %vl)
+  ret <vscale x 16 x i32> %r
+}

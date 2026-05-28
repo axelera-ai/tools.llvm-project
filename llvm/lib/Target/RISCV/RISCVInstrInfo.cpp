@@ -74,6 +74,15 @@ using namespace RISCV;
 
 } // namespace llvm::RISCVVPseudosTable
 
+namespace llvm::RISCVMatrixPseudosTable {
+
+using namespace RISCV;
+
+#define GET_RISCVMatrixPseudosTable_IMPL
+#include "RISCVGenSearchableTables.inc"
+
+} // namespace llvm::RISCVMatrixPseudosTable
+
 namespace llvm::RISCV {
 
 #define GET_RISCVMaskedPseudosTable_IMPL

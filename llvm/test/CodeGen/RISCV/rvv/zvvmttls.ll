@@ -249,3 +249,46 @@ define void @test_vmtts_nxv1f64(<vscale x 1 x double> %v, ptr %base,
     <vscale x 1 x double> %v, ptr %base, iXLen %ld, iXLen %vl)
   ret void
 }
+
+; LMUL > 1 spot-checks for the transposing tile load/store.
+
+declare <vscale x 4 x i32> @llvm.riscv.vmttl.nxv4i32.p0.iXLen(
+  <vscale x 4 x i32>, ptr, iXLen, iXLen)
+
+define <vscale x 4 x i32> @test_vmttl_nxv4i32(<vscale x 4 x i32> %p,
+                                              ptr %base, iXLen %ld,
+                                              iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmttl_nxv4i32:
+; CHECK:       vmttl.v v8, (a0), a1
+; CHECK:       ret
+  %r = call <vscale x 4 x i32> @llvm.riscv.vmttl.nxv4i32.p0.iXLen(
+    <vscale x 4 x i32> %p, ptr %base, iXLen %ld, iXLen %vl)
+  ret <vscale x 4 x i32> %r
+}
+
+declare void @llvm.riscv.vmtts.nxv16i32.p0.iXLen(
+  <vscale x 16 x i32>, ptr, iXLen, iXLen)
+
+define void @test_vmtts_nxv16i32(<vscale x 16 x i32> %v, ptr %base,
+                                 iXLen %ld, iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmtts_nxv16i32:
+; CHECK:       vmtts.v v8, (a0), a1
+; CHECK:       ret
+  call void @llvm.riscv.vmtts.nxv16i32.p0.iXLen(
+    <vscale x 16 x i32> %v, ptr %base, iXLen %ld, iXLen %vl)
+  ret void
+}
+
+declare <vscale x 8 x i32> @llvm.riscv.vmttl.l8.nxv8i32.p0.iXLen(
+  <vscale x 8 x i32>, ptr, iXLen, iXLen)
+
+define <vscale x 8 x i32> @test_vmttl_l8_nxv8i32(<vscale x 8 x i32> %p,
+                                                 ptr %base, iXLen %ld,
+                                                 iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmttl_l8_nxv8i32:
+; CHECK:       vmttl.v v8, (a0), a1, L8
+; CHECK:       ret
+  %r = call <vscale x 8 x i32> @llvm.riscv.vmttl.l8.nxv8i32.p0.iXLen(
+    <vscale x 8 x i32> %p, ptr %base, iXLen %ld, iXLen %vl)
+  ret <vscale x 8 x i32> %r
+}

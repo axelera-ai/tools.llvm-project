@@ -77,3 +77,42 @@ vfloat32m1_t test_vmtl_v_f32m1(const float *base, size_t ld, size_t vl) {
 vfloat64m1_t test_vmtl_v_f64m1(const double *base, size_t ld, size_t vl) {
   return __riscv_vmtl_v_f64m1(base, ld, vl);
 }
+
+// LMUL > 1 spot checks for the order-preserving tile load. The intrinsic
+// scales naturally with vtype.LMUL since there's only one tile per call.
+
+// CHECK-LABEL: define dso_local <vscale x 4 x i32> @test_vmtl_v_i32m2
+// CHECK-SAME:    (ptr noundef readonly captures(none) [[BASE:%.*]], i64 noundef [[LD:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 4 x i32> @llvm.riscv.vmtl.nxv4i32.p0.i64(<vscale x 4 x i32> poison, ptr [[BASE]], i64 [[LD]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 4 x i32> [[TMP0]]
+//
+vint32m2_t test_vmtl_v_i32m2(const int32_t *base, size_t ld, size_t vl) {
+  return __riscv_vmtl_v_i32m2(base, ld, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 8 x i32> @test_vmtl_v_i32m4
+// CHECK-SAME:    (ptr noundef readonly captures(none) [[BASE:%.*]], i64 noundef [[LD:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 8 x i32> @llvm.riscv.vmtl.nxv8i32.p0.i64(<vscale x 8 x i32> poison, ptr [[BASE]], i64 [[LD]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 8 x i32> [[TMP0]]
+//
+vint32m4_t test_vmtl_v_i32m4(const int32_t *base, size_t ld, size_t vl) {
+  return __riscv_vmtl_v_i32m4(base, ld, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 16 x i32> @test_vmtl_v_i32m8
+// CHECK-SAME:    (ptr noundef readonly captures(none) [[BASE:%.*]], i64 noundef [[LD:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 16 x i32> @llvm.riscv.vmtl.nxv16i32.p0.i64(<vscale x 16 x i32> poison, ptr [[BASE]], i64 [[LD]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 16 x i32> [[TMP0]]
+//
+vint32m8_t test_vmtl_v_i32m8(const int32_t *base, size_t ld, size_t vl) {
+  return __riscv_vmtl_v_i32m8(base, ld, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 8 x float> @test_vmtl_v_l4_f32m4
+// CHECK-SAME:    (ptr noundef readonly captures(none) [[BASE:%.*]], i64 noundef [[LD:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 8 x float> @llvm.riscv.vmtl.l4.nxv8f32.p0.i64(<vscale x 8 x float> poison, ptr [[BASE]], i64 [[LD]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 8 x float> [[TMP0]]
+//
+vfloat32m4_t test_vmtl_v_l4_f32m4(const float *base, size_t ld, size_t vl) {
+  return __riscv_vmtl_v_l4_f32m4(base, ld, vl);
+}
