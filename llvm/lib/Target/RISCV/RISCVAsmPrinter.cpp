@@ -1189,8 +1189,101 @@ static bool lowerRISCVVMachineInstrToMCInst(const MachineInstr *MI,
   return true;
 }
 
+// Convert a register to its base VR subregister if it belongs to a wider
+// VRM{2,4,8} register group, since matrix instructions encode only the base
+// register number — the LMUL grouping is established in vtype by a prior
+// vsetvl_matrix. Other register classes (V0, X0, plain VR) pass through.
+static Register baseVRRegister(Register Reg, const TargetRegisterInfo *TRI) {
+  if (RISCV::VRM2RegClass.contains(Reg) ||
+      RISCV::VRM4RegClass.contains(Reg) ||
+      RISCV::VRM8RegClass.contains(Reg))
+    return TRI->getSubReg(Reg, RISCV::sub_vrm1_0);
+  return Reg;
+}
+
+static MCOperand lowerVectorReg(const MachineOperand &MO,
+                                const TargetRegisterInfo *TRI) {
+  return MCOperand::createReg(baseVRRegister(MO.getReg(), TRI));
+}
+
+// Zvvm matrix pseudos lower to a single real instruction. Each pseudo's
+// Kind (set in the .td via RISCVMatrixPseudo) selects the lowering shape —
+// MAC, tile load (masked/unmasked), or tile store (masked/unmasked).
+//
+// MC operand maps:
+//   MAC                : pseudo (vd_wb, vd, vs1, vs2, vl)
+//                       → real (vd_wb, vd, vs1, vs2)
+//   TileLoad           : pseudo (vd, passthru, rs1, rs2, lambda, vl)
+//                       → real (vd, rs1, rs2, lambda, NoReg)
+//   TileLoadMask       : pseudo (vd, passthru, rs1, rs2, lambda, V0, vl, policy)
+//                       → real (vd, rs1, rs2, lambda, V0)
+//   TileStore          : pseudo (vs3, rs1, rs2, lambda, vl)
+//                       → real (vs3, rs1, rs2, lambda, NoReg)
+//   TileStoreMask      : pseudo (vs3, rs1, rs2, lambda, V0, vl)
+//                       → real (vs3, rs1, rs2, lambda, V0)
+static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
+                                   const RISCVSubtarget *STI) {
+  const auto *Info =
+      RISCVMatrixPseudosTable::getMatrixPseudoInfo(MI->getOpcode());
+  if (!Info)
+    return false;
+
+  OutMI.setOpcode(Info->BaseInstr);
+  const TargetRegisterInfo *TRI = STI->getRegisterInfo();
+
+  using namespace RISCVMatrixPseudosTable;
+  switch (Info->Kind) {
+  case MAC: {
+    // Operands 0..3 → real operands; $vl at operand 4 is dropped.
+    for (unsigned OpNo = 0; OpNo < 4; ++OpNo)
+      OutMI.addOperand(lowerVectorReg(MI->getOperand(OpNo), TRI));
+    return true;
+  }
+  case TileLoad: {
+    // Pseudo operand layout: vd (def), passthru (tied use), rs1, rs2, lambda, vl.
+    OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vd
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs1
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(3).getReg())); // rs2
+    OutMI.addOperand(MCOperand::createImm(MI->getOperand(4).getImm())); // lambda
+    OutMI.addOperand(MCOperand::createReg(RISCV::NoRegister));          // vm
+    return true;
+  }
+  case TileLoadMask: {
+    // Pseudo: vd, passthru, rs1, rs2, lambda, mask(V0), vl, policy.
+    OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vd
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs1
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(3).getReg())); // rs2
+    OutMI.addOperand(MCOperand::createImm(MI->getOperand(4).getImm())); // lambda
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(5).getReg())); // V0
+    return true;
+  }
+  case TileStore: {
+    // Pseudo: vs3, rs1, rs2, lambda, vl.
+    OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vs3
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(1).getReg())); // rs1
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs2
+    OutMI.addOperand(MCOperand::createImm(MI->getOperand(3).getImm())); // lambda
+    OutMI.addOperand(MCOperand::createReg(RISCV::NoRegister));          // vm
+    return true;
+  }
+  case TileStoreMask: {
+    // Pseudo: vs3, rs1, rs2, lambda, mask(V0), vl.
+    OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vs3
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(1).getReg())); // rs1
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs2
+    OutMI.addOperand(MCOperand::createImm(MI->getOperand(3).getImm())); // lambda
+    OutMI.addOperand(MCOperand::createReg(MI->getOperand(4).getReg())); // V0
+    return true;
+  }
+  }
+  llvm_unreachable("unhandled RISCVMatrixPseudo Kind");
+}
+
 void RISCVAsmPrinter::lowerToMCInst(const MachineInstr *MI, MCInst &OutMI) {
   if (lowerRISCVVMachineInstrToMCInst(MI, OutMI, STI))
+    return;
+
+  if (lowerRISCVMatrixPseudo(MI, OutMI, STI))
     return;
 
   OutMI.setOpcode(MI->getOpcode());

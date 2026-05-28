@@ -67,7 +67,7 @@ void gemm_f32(const float *A, const float *B, float *C,
       for (size_t k = 0; k < K; k += K_eff) {
         vfloat32m1_t a = __riscv_vmtl_v_f32m1(&A[i * lda + k], lda, vl);
         vfloat32m1_t b = __riscv_vmtl_v_f32m1(&B[j * ldb + k], ldb, vl);
-        c = __riscv_vfmmacc_vv_f32m1(c, a, b, vl);
+        c = __riscv_vfmmacc_vv_f32m1_lm1(c, a, b, vl);
       }
 
       __riscv_vmts_v_f32m1(&C[i * ldc + j], ldc, c, vl);

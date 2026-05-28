@@ -82,7 +82,7 @@ void gemm_i32(const int32_t *A, const int32_t *B, int32_t *C,
       for (size_t k = 0; k < K; k += K_eff) {
         vint32m1_t a = __riscv_vmtl_v_i32m1(&A[i * lda + k], lda, vl);
         vint32m1_t b = __riscv_vmtl_v_i32m1(&B[j * ldb + k], ldb, vl);
-        c = __riscv_vmmacc_vv_i32m1(c, a, b, vl);
+        c = __riscv_vmmacc_vv_i32m1_lm1(c, a, b, vl);
       }
 
       __riscv_vmts_v_i32m1(&C[i * ldc + j], ldc, c, vl);

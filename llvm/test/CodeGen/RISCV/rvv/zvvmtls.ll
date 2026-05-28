@@ -268,3 +268,60 @@ define void @test_vmts_nxv1f64(<vscale x 1 x double> %v, ptr %base,
     <vscale x 1 x double> %v, ptr %base, iXLen %ld, iXLen %vl)
   ret void
 }
+
+; LMUL > 1 spot-checks: tile load/store encoding uses the base VR register
+; number; the actual register-group size comes from vtype.LMUL programmed by
+; the caller's vsetvl_matrix.
+
+declare <vscale x 4 x i32> @llvm.riscv.vmtl.nxv4i32.p0.iXLen(
+  <vscale x 4 x i32>, ptr, iXLen, iXLen)
+
+define <vscale x 4 x i32> @test_vmtl_nxv4i32(<vscale x 4 x i32> %p, ptr %base,
+                                             iXLen %ld, iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmtl_nxv4i32:
+; CHECK:       vmtl.v v8, (a0), a1
+; CHECK:       ret
+  %r = call <vscale x 4 x i32> @llvm.riscv.vmtl.nxv4i32.p0.iXLen(
+    <vscale x 4 x i32> %p, ptr %base, iXLen %ld, iXLen %vl)
+  ret <vscale x 4 x i32> %r
+}
+
+declare <vscale x 16 x i32> @llvm.riscv.vmtl.nxv16i32.p0.iXLen(
+  <vscale x 16 x i32>, ptr, iXLen, iXLen)
+
+define <vscale x 16 x i32> @test_vmtl_nxv16i32(<vscale x 16 x i32> %p, ptr %base,
+                                               iXLen %ld, iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmtl_nxv16i32:
+; CHECK:       vmtl.v v8, (a0), a1
+; CHECK:       ret
+  %r = call <vscale x 16 x i32> @llvm.riscv.vmtl.nxv16i32.p0.iXLen(
+    <vscale x 16 x i32> %p, ptr %base, iXLen %ld, iXLen %vl)
+  ret <vscale x 16 x i32> %r
+}
+
+declare void @llvm.riscv.vmts.nxv8i32.p0.iXLen(
+  <vscale x 8 x i32>, ptr, iXLen, iXLen)
+
+define void @test_vmts_nxv8i32(<vscale x 8 x i32> %v, ptr %base,
+                               iXLen %ld, iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmts_nxv8i32:
+; CHECK:       vmts.v v8, (a0), a1
+; CHECK:       ret
+  call void @llvm.riscv.vmts.nxv8i32.p0.iXLen(
+    <vscale x 8 x i32> %v, ptr %base, iXLen %ld, iXLen %vl)
+  ret void
+}
+
+declare <vscale x 8 x float> @llvm.riscv.vmtl.l4.nxv8f32.p0.iXLen(
+  <vscale x 8 x float>, ptr, iXLen, iXLen)
+
+define <vscale x 8 x float> @test_vmtl_l4_nxv8f32(<vscale x 8 x float> %p,
+                                                  ptr %base, iXLen %ld,
+                                                  iXLen %vl) nounwind {
+; CHECK-LABEL: test_vmtl_l4_nxv8f32:
+; CHECK:       vmtl.v v8, (a0), a1, L4
+; CHECK:       ret
+  %r = call <vscale x 8 x float> @llvm.riscv.vmtl.l4.nxv8f32.p0.iXLen(
+    <vscale x 8 x float> %p, ptr %base, iXLen %ld, iXLen %vl)
+  ret <vscale x 8 x float> %r
+}

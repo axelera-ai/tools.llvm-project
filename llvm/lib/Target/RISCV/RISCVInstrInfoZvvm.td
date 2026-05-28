@@ -65,6 +65,13 @@ def V8WMMACC_VV : RVInstVMatrixMAC<0b111011, "v8wmmacc.vv">;
 // .td pattern can consume it. The PseudoInstExpansion below rewrites the
 // pseudo to the real instruction at MC-lowering time, discarding $vl (the
 // real instruction reads VL implicitly from the vl CSR).
+//
+// Matrix multiply-accumulate has two independent register-group axes:
+//   * vd  uses EMUL_C = VLEN / (SEW(C) * lambda^2), independent of LMUL.
+//   * vs1 / vs2 use vtype.LMUL.
+// PseudoVMatrixMACPair is parameterized over both; PseudoVMatrixMAC is the
+// degenerate single-LMUL form kept for the widening MACs that still ride on
+// the EMUL_C = LMUL = 1 representative pattern (deferred follow-up).
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
@@ -74,8 +81,66 @@ class PseudoVMatrixMAC<Instruction realInst>
              (ins VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl), []>,
       PseudoInstExpansion<(realInst VR:$vd_wb, VR:$vd, VR:$vs1, VR:$vs2)>;
 
+// Marker base class for all Zvvm matrix pseudos that need MC lowering via the
+// dedicated helper (lowerRISCVMatrixPseudo in RISCVAsmPrinter.cpp). The helper
+// looks up the entry in RISCVMatrixPseudosTable, dispatches on `Kind`, and
+// handles VRM{2,4,8} → VR subregister extraction since the single real
+// instruction always has VR operands. PseudoInstExpansion is unsuitable
+// because it requires strict operand-type matching at tablegen time.
+//
+// We don't inherit from RISCVVPseudo deliberately: matrix instructions
+// configure their own vtype via vsetvl_matrix (including the matrix-only
+// fields lambda / bs / altfmt_A / altfmt_B), and we don't want
+// RISCVInsertVSETVLI to inject a standard vsetvli ahead of them.
+//
+// Kind values:
+//   0 = MAC                  — pseudo (vd_wb, vd, vs1, vs2, vl) → real (vd_wb, vd, vs1, vs2)
+//   1 = Tile load (unmasked) — pseudo (vd, passthru, rs1, rs2, lambda, vl)
+//                              → real (vd, rs1, rs2, lambda, zero_reg)
+//   2 = Tile load masked     — pseudo (vd, passthru, rs1, rs2, lambda, V0, vl, policy)
+//                              → real (vd, rs1, rs2, lambda, V0)
+//   3 = Tile store unmasked  — pseudo (vs3, rs1, rs2, lambda, vl)
+//                              → real (vs3, rs1, rs2, lambda, zero_reg)
+//   4 = Tile store masked    — pseudo (vs3, rs1, rs2, lambda, V0, vl)
+//                              → real (vs3, rs1, rs2, lambda, V0)
+class RISCVMatrixPseudo<Instruction realInst, int kind> {
+  Pseudo Pseudo = !cast<Pseudo>(NAME);
+  Instruction BaseInstr = realInst;
+  bits<3> Kind = kind;
+}
+
+def RISCVMatrixPseudosTable : GenericTable {
+  let FilterClass = "RISCVMatrixPseudo";
+  let CppTypeName = "MatrixPseudoInfo";
+  let Fields = [ "Pseudo", "BaseInstr", "Kind" ];
+  let PrimaryKey = [ "Pseudo" ];
+  let PrimaryKeyName = "getMatrixPseudoInfo";
+  let PrimaryKeyEarlyOut = true;
+}
+
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
+    Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in
+class PseudoVMatrixMACPair<Instruction realInst,
+                           VTypeInfo cti, VTypeInfo abti>
+    : Pseudo<(outs cti.RegClass:$vd_wb),
+             (ins cti.RegClass:$vd, abti.RegClass:$vs1,
+                  abti.RegClass:$vs2, GPRNoX0:$vl), []>,
+      RISCVMatrixPseudo<realInst, /*MAC=*/0>;
+
+// VTI lists for the non-widening MAC (EMUL_C, LMUL) cross-product.
+// EMUL_C ∈ {1,2,4,8} (spec also permits 16; capped at 8 because upstream RVV
+// has no VRM16 register class). LMUL ∈ {1,2,4,8}; fractional LMUL is spec-
+// reserved for the IME family.
+defvar AllZvvmMACVTIs_I32 = [VI32M1, VI32M2, VI32M4, VI32M8];
+defvar AllZvvmMACVTIs_F32 = [VF32M1, VF32M2, VF32M4, VF32M8];
+
 let Predicates = [HasStdExtZvvmm] in {
-def PseudoVMMACC_VV   : PseudoVMatrixMAC<VMMACC_VV>;
+// Pseudo name: PseudoVMMACC_VV_M{EMUL_C}_M{LMUL} (in that order).
+foreach cti = AllZvvmMACVTIs_I32 in
+  foreach abti = AllZvvmMACVTIs_I32 in
+    def "PseudoVMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VMMACC_VV, cti, abti>;
+
 def PseudoVWMMACC_VV  : PseudoVMatrixMAC<VWMMACC_VV>;
 def PseudoVQMMACC_VV  : PseudoVMatrixMAC<VQMMACC_VV>;
 def PseudoV8WMMACC_VV : PseudoVMatrixMAC<V8WMMACC_VV>;
@@ -84,18 +149,23 @@ def PseudoV8WMMACC_VV : PseudoVMatrixMAC<V8WMMACC_VV>;
 //===----------------------------------------------------------------------===//
 // ISel patterns: lower intrinsics to pseudos.
 //
-// Phase 1 emits one pattern per intrinsic for a single representative
-// (SEW, LMUL) combination. Additional (SEW, LMUL) coverage is added when we
-// scale the multiclass machinery in a later phase.
+// Non-widening MAC (vmmacc.vv): EMUL_C ∈ {1,2,4,8} × LMUL ∈ {1,2,4,8} cross
+// product, since EMUL_C and LMUL are independent. The widening MACs still
+// emit one representative pattern per intrinsic at EMUL_C = LMUL = 1; the
+// (SEW(A) ≠ SEW(C), EMUL_C ≠ LMUL) coverage for them is deferred.
 //===----------------------------------------------------------------------===//
 
 let Predicates = [HasStdExtZvvmm] in {
-// W=1: SEW(C) = SEW(A) = SEW(B) = 32, EMUL_C = LMUL = 1.
-def : Pat<(nxv2i32 (int_riscv_vmmacc (nxv2i32 VR:$vd),
-                                     (nxv2i32 VR:$vs1),
-                                     (nxv2i32 VR:$vs2),
-                                     (XLenVT GPRNoX0:$vl))),
-          (PseudoVMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+// W=1: SEW(C) = SEW(A) = SEW(B) = 32. Independent (EMUL_C, LMUL).
+foreach cti = AllZvvmMACVTIs_I32 in
+  foreach abti = AllZvvmMACVTIs_I32 in
+    def : Pat<(cti.Vector (int_riscv_vmmacc (cti.Vector cti.RegClass:$vd),
+                                            (abti.Vector abti.RegClass:$vs1),
+                                            (abti.Vector abti.RegClass:$vs2),
+                                            (XLenVT GPRNoX0:$vl))),
+              (!cast<Instruction>("PseudoVMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX)
+                  cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
+                  GPRNoX0:$vl)>;
 
 // W=2: SEW(C) = 32, EEW(A) = EEW(B) = 16, EMUL_C = LMUL = 1.
 def : Pat<(nxv2i32 (int_riscv_vwmmacc (nxv2i32 VR:$vd),
@@ -139,28 +209,38 @@ def VF8WMMACC_VV : RVInstVFMatrixMAC<0b010111, "vf8wmmacc.vv">;
 } // Predicates = [HasStdExtZvvfmm]
 
 let Predicates = [HasStdExtZvvfmm] in {
-def PseudoVFMMACC_VV   : PseudoVMatrixMAC<VFMMACC_VV>;
+// Pseudo name: PseudoVFMMACC_VV_M{EMUL_C}_M{LMUL} (in that order).
+foreach cti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in
+    def "PseudoVFMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VFMMACC_VV, cti, abti>;
+
 def PseudoVFWMMACC_VV  : PseudoVMatrixMAC<VFWMMACC_VV>;
 def PseudoVFQMMACC_VV  : PseudoVMatrixMAC<VFQMMACC_VV>;
 def PseudoVF8WMMACC_VV : PseudoVMatrixMAC<VF8WMMACC_VV>;
 } // Predicates = [HasStdExtZvvfmm]
 
-// ISel patterns for the FP MACs. Phase 1 lowers each intrinsic for one
-// representative (SEW, EMUL_C=LMUL=1) shape. Broader (SEW, LMUL) coverage —
-// and the architecturally-trickier EMUL_C ≠ LMUL coverage — lands alongside
-// the integer-side widening builtins in a follow-up.
+// ISel patterns for the FP MACs. The non-widening vfmmacc.vv covers the
+// independent (EMUL_C, LMUL) ∈ {1,2,4,8}^2 grid; the widening variants still
+// emit one representative pattern per intrinsic at EMUL_C = LMUL = 1, since
+// they additionally need varying SEW(A) ≠ SEW(C) coverage that ships in a
+// follow-up alongside the integer-widening builtins.
 //
 // Type choices below mirror the integer side's container convention: when the
 // IR has no first-class FP type for an element width (OFP8 / E4M3 / E5M2), we
 // use the integer container (nxv8i8) and rely on vtype.altfmt to select the
 // FP8 interpretation at execution time.
 let Predicates = [HasStdExtZvvfmm] in {
-// W=1: SEW(C) = SEW(A) = SEW(B) = 32, FP32 accumulator and FP32 inputs.
-def : Pat<(nxv2f32 (int_riscv_vfmmacc (nxv2f32 VR:$vd),
-                                      (nxv2f32 VR:$vs1),
-                                      (nxv2f32 VR:$vs2),
-                                      (XLenVT GPRNoX0:$vl))),
-          (PseudoVFMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+// W=1: SEW(C) = SEW(A) = SEW(B) = 32. Independent (EMUL_C, LMUL).
+foreach cti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in
+    def : Pat<(cti.Vector (int_riscv_vfmmacc (cti.Vector cti.RegClass:$vd),
+                                             (abti.Vector abti.RegClass:$vs1),
+                                             (abti.Vector abti.RegClass:$vs2),
+                                             (XLenVT GPRNoX0:$vl))),
+              (!cast<Instruction>("PseudoVFMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX)
+                  cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
+                  GPRNoX0:$vl)>;
 
 // W=2: SEW(C) = 32, EEW(A) = EEW(B) = 16, FP16 inputs to FP32 accumulator.
 // BF16 input (altfmt_A/B = 1) reuses the same IR type at LMUL=1; format
@@ -390,21 +470,20 @@ let Predicates = [HasStdExtZvvmttls] in {
 //===----------------------------------------------------------------------===//
 // Pseudo instructions for tile load/store.
 //
-// Each pseudo carries the vl operand from the intrinsic. The masked variants
-// additionally carry a VMV0:$mask (forced to v0). PseudoInstExpansion rewrites
-// the pseudo to the real instruction with a literal vm bit (1 = no mask,
-// 0 = masked).
+// Each pseudo is generated per (mnemonic, LMUL ∈ {1,2,4,8}) so its register
+// operand uses the LMUL-appropriate VR / VRM2 / VRM4 / VRM8 class. The single
+// underlying real instruction (VMTL_V / VMTS_V / VMTTL_V / VMTTS_V) always
+// encodes via the base VR register number; the LMUL grouping is established
+// in vtype by a prior vsetvl_matrix. MC lowering (RISCVMatrixPseudo path)
+// drops $passthru / $vl / $policy and adds zero_reg or V0 for $vm depending
+// on masked-ness, and converts VRM{2,4,8} → VR via sub_vrm1_0.
 //===----------------------------------------------------------------------===//
 
-// Pseudos carry the vl (and mask) operands the IR intrinsic supplies and
-// expand to the matching real instruction. Unmasked pseudos pass zero_reg as
-// the VMaskOp value (vm = 1); masked pseudos pass V0 (vm = 0).
-class PseudoVMatrixTileLoad<Instruction realInst>
-    : Pseudo<(outs VR:$vd),
-             (ins VR:$passthru, GPRMemZeroOffset:$rs1, GPR:$rs2,
+class PseudoVMatrixTileLoad<Instruction realInst, LMULInfo m>
+    : Pseudo<(outs m.vrclass:$vd),
+             (ins m.vrclass:$passthru, GPRMemZeroOffset:$rs1, GPR:$rs2,
                   lambdaarg:$lambda, GPRNoX0:$vl), []>,
-      PseudoInstExpansion<(realInst VR:$vd, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                                    lambdaarg:$lambda, zero_reg)> {
+      RISCVMatrixPseudo<realInst, /*TileLoad=*/1> {
   let mayLoad = 1;
   let mayStore = 0;
   let hasSideEffects = 0;
@@ -412,13 +491,12 @@ class PseudoVMatrixTileLoad<Instruction realInst>
   let Constraints = "$vd = $passthru";
 }
 
-class PseudoVMatrixTileLoadMask<Instruction realInst>
-    : Pseudo<(outs VR:$vd),
-             (ins VR:$passthru, GPRMemZeroOffset:$rs1, GPR:$rs2,
+class PseudoVMatrixTileLoadMask<Instruction realInst, LMULInfo m>
+    : Pseudo<(outs m.vrclass:$vd),
+             (ins m.vrclass:$passthru, GPRMemZeroOffset:$rs1, GPR:$rs2,
                   lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl,
                   vec_policy:$policy), []>,
-      PseudoInstExpansion<(realInst VR:$vd, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                                    lambdaarg:$lambda, V0)> {
+      RISCVMatrixPseudo<realInst, /*TileLoadMask=*/2> {
   let mayLoad = 1;
   let mayStore = 0;
   let hasSideEffects = 0;
@@ -426,41 +504,43 @@ class PseudoVMatrixTileLoadMask<Instruction realInst>
   let Constraints = "$vd = $passthru";
 }
 
-class PseudoVMatrixTileStore<Instruction realInst>
+class PseudoVMatrixTileStore<Instruction realInst, LMULInfo m>
     : Pseudo<(outs),
-             (ins VR:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
+             (ins m.vrclass:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
                   lambdaarg:$lambda, GPRNoX0:$vl), []>,
-      PseudoInstExpansion<(realInst VR:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                                    lambdaarg:$lambda, zero_reg)> {
+      RISCVMatrixPseudo<realInst, /*TileStore=*/3> {
   let mayLoad = 0;
   let mayStore = 1;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE];
 }
 
-class PseudoVMatrixTileStoreMask<Instruction realInst>
+class PseudoVMatrixTileStoreMask<Instruction realInst, LMULInfo m>
     : Pseudo<(outs),
-             (ins VR:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
+             (ins m.vrclass:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
                   lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl), []>,
-      PseudoInstExpansion<(realInst VR:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                                    lambdaarg:$lambda, V0)> {
+      RISCVMatrixPseudo<realInst, /*TileStoreMask=*/4> {
   let mayLoad = 0;
   let mayStore = 1;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE, V0];
 }
 
-let Predicates = [HasStdExtZvvmtls] in {
-  def PseudoVMTL_V       : PseudoVMatrixTileLoad<VMTL_V>;
-  def PseudoVMTL_V_MASK  : PseudoVMatrixTileLoadMask<VMTL_V>;
-  def PseudoVMTS_V       : PseudoVMatrixTileStore<VMTS_V>;
-  def PseudoVMTS_V_MASK  : PseudoVMatrixTileStoreMask<VMTS_V>;
+defvar AllZvvmTileLSLMULs = [V_M1, V_M2, V_M4, V_M8];
+
+let Predicates = [HasStdExtZvvmtls] in
+foreach m = AllZvvmTileLSLMULs in {
+  def "PseudoVMTL_V_"#m.MX      : PseudoVMatrixTileLoad<VMTL_V, m>;
+  def "PseudoVMTL_V_"#m.MX#"_MASK"  : PseudoVMatrixTileLoadMask<VMTL_V, m>;
+  def "PseudoVMTS_V_"#m.MX      : PseudoVMatrixTileStore<VMTS_V, m>;
+  def "PseudoVMTS_V_"#m.MX#"_MASK"  : PseudoVMatrixTileStoreMask<VMTS_V, m>;
 }
-let Predicates = [HasStdExtZvvmttls] in {
-  def PseudoVMTTL_V      : PseudoVMatrixTileLoad<VMTTL_V>;
-  def PseudoVMTTL_V_MASK : PseudoVMatrixTileLoadMask<VMTTL_V>;
-  def PseudoVMTTS_V      : PseudoVMatrixTileStore<VMTTS_V>;
-  def PseudoVMTTS_V_MASK : PseudoVMatrixTileStoreMask<VMTTS_V>;
+let Predicates = [HasStdExtZvvmttls] in
+foreach m = AllZvvmTileLSLMULs in {
+  def "PseudoVMTTL_V_"#m.MX     : PseudoVMatrixTileLoad<VMTTL_V, m>;
+  def "PseudoVMTTL_V_"#m.MX#"_MASK" : PseudoVMatrixTileLoadMask<VMTTL_V, m>;
+  def "PseudoVMTTS_V_"#m.MX     : PseudoVMatrixTileStore<VMTTS_V, m>;
+  def "PseudoVMTTS_V_"#m.MX#"_MASK" : PseudoVMatrixTileStoreMask<VMTTS_V, m>;
 }
 
 //===----------------------------------------------------------------------===//
@@ -468,57 +548,67 @@ let Predicates = [HasStdExtZvvmttls] in {
 //
 // The tile load/store instructions are element-type-agnostic at the encoding
 // layer — SEW comes from vtype.vsew and the only thing the IR vector type
-// affects in the backend is register-class selection (everything is in VR at
-// LMUL=1). We therefore emit one pattern per intrinsic per LMUL=1 element
-// type, for both the order-preserving (vmtl/vmts) and transposing (vmttl/
-// vmtts) mnemonics.
+// affects in the backend is register-class selection. We emit one pattern per
+// (intrinsic, lambda, element-type, LMUL) and dispatch to the matching
+// per-LMUL pseudo (PseudoVMTL_V_M{1,2,4,8}, etc.) so VR / VRM2 / VRM4 / VRM8
+// is picked up correctly via vti.RegClass.
 //===----------------------------------------------------------------------===//
 
-// LMUL=1 vector types the tile load/store builtins expose to Clang. The
-// corresponding mask types come from `vti.Mask` so the same class works for
-// every element width.
-defvar AllZvvmTileLSM1VTIs =
-    [VI8M1, VI16M1, VI32M1, VI64M1, VF16M1, VF32M1, VF64M1];
+// Vector types the tile load/store builtins are ISel-pattern-matched over:
+// every element type at LMUL ∈ {1, 2, 4, 8}. The corresponding mask type
+// comes from `vti.Mask` and the register class from `vti.RegClass`, so the
+// same generic Pat<> class works for every element width and LMUL.
+defvar AllZvvmTileLSVTIs =
+    [VI8M1,  VI8M2,  VI8M4,  VI8M8,
+     VI16M1, VI16M2, VI16M4, VI16M8,
+     VI32M1, VI32M2, VI32M4, VI32M8,
+     VI64M1, VI64M2, VI64M4, VI64M8,
+     VF16M1, VF16M2, VF16M4, VF16M8,
+     VF32M1, VF32M2, VF32M4, VF32M8,
+     VF64M1, VF64M2, VF64M4, VF64M8];
 
 class TileLoadPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                   VTypeInfo vti>
-    : Pat<(vti.Vector (intr (vti.Vector VR:$passthru),
+    : Pat<(vti.Vector (intr (vti.Vector vti.RegClass:$passthru),
                             GPR:$rs1,
                             (XLenVT GPR:$rs2),
                             (XLenVT GPRNoX0:$vl))),
-          (pseudo VR:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal, GPRNoX0:$vl)>;
+          (pseudo vti.RegClass:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal,
+                  GPRNoX0:$vl)>;
 
 class TileLoadMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                       VTypeInfo vti>
-    : Pat<(vti.Vector (intr (vti.Vector VR:$passthru),
+    : Pat<(vti.Vector (intr (vti.Vector vti.RegClass:$passthru),
                             GPR:$rs1,
                             (XLenVT GPR:$rs2),
                             (vti.Mask VMV0:$mask),
                             (XLenVT GPRNoX0:$vl),
                             (XLenVT timm:$policy))),
-          (pseudo VR:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal,
+          (pseudo vti.RegClass:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal,
                   VMV0:$mask, GPRNoX0:$vl, (XLenVT timm:$policy))>;
 
 class TileStorePat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                    VTypeInfo vti>
-    : Pat<(intr (vti.Vector VR:$vs3),
+    : Pat<(intr (vti.Vector vti.RegClass:$vs3),
                 GPR:$rs1,
                 (XLenVT GPR:$rs2),
                 (XLenVT GPRNoX0:$vl)),
-          (pseudo VR:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal, GPRNoX0:$vl)>;
+          (pseudo vti.RegClass:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal,
+                  GPRNoX0:$vl)>;
 
 class TileStoreMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                        VTypeInfo vti>
-    : Pat<(intr (vti.Vector VR:$vs3),
+    : Pat<(intr (vti.Vector vti.RegClass:$vs3),
                 GPR:$rs1,
                 (XLenVT GPR:$rs2),
                 (vti.Mask VMV0:$mask),
                 (XLenVT GPRNoX0:$vl)),
-          (pseudo VR:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal,
+          (pseudo vti.RegClass:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal,
                   VMV0:$mask, GPRNoX0:$vl)>;
 
-// Each per-lambda intrinsic lowers to the same pseudo with a different literal
-// lambda value in the operand slot. Lambda encoding:
+// Each per-lambda intrinsic lowers to the same pseudo (for its (mnemonic,
+// LMUL)) with a different literal lambda value in the operand slot. Lambda
+// encoding:
 //   "" -> 0 (use vtype.lambda), "_l1" -> 1, "_l2" -> 2, "_l4" -> 3,
 //   "_l8" -> 4, "_l16" -> 5, "_l32" -> 6, "_l64" -> 7.
 foreach lsuf = ["", "_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
@@ -534,32 +624,37 @@ foreach lsuf = ["", "_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
   // FP element types pick up the matching scalar-FP+Zve* predicates from
   // GetVTypeMinimalPredicates so the pattern is only available when the IR
   // container type itself is legal.
-  foreach vti = AllZvvmTileLSM1VTIs in {
+  foreach vti = AllZvvmTileLSVTIs in {
+    defvar mx = vti.LMul.MX;
     let Predicates = !listconcat([HasStdExtZvvmtls],
                                  GetVTypeMinimalPredicates<vti>.Predicates) in {
       def : TileLoadPat<
-          !cast<Intrinsic>("int_riscv_vmtl"#lsuf), PseudoVMTL_V, lval, vti>;
+          !cast<Intrinsic>("int_riscv_vmtl"#lsuf),
+          !cast<Instruction>("PseudoVMTL_V_"#mx), lval, vti>;
       def : TileLoadMaskPat<
           !cast<Intrinsic>("int_riscv_vmtl"#lsuf#"_mask"),
-          PseudoVMTL_V_MASK, lval, vti>;
+          !cast<Instruction>("PseudoVMTL_V_"#mx#"_MASK"), lval, vti>;
       def : TileStorePat<
-          !cast<Intrinsic>("int_riscv_vmts"#lsuf), PseudoVMTS_V, lval, vti>;
+          !cast<Intrinsic>("int_riscv_vmts"#lsuf),
+          !cast<Instruction>("PseudoVMTS_V_"#mx), lval, vti>;
       def : TileStoreMaskPat<
           !cast<Intrinsic>("int_riscv_vmts"#lsuf#"_mask"),
-          PseudoVMTS_V_MASK, lval, vti>;
+          !cast<Instruction>("PseudoVMTS_V_"#mx#"_MASK"), lval, vti>;
     }
     let Predicates = !listconcat([HasStdExtZvvmttls],
                                  GetVTypeMinimalPredicates<vti>.Predicates) in {
       def : TileLoadPat<
-          !cast<Intrinsic>("int_riscv_vmttl"#lsuf), PseudoVMTTL_V, lval, vti>;
+          !cast<Intrinsic>("int_riscv_vmttl"#lsuf),
+          !cast<Instruction>("PseudoVMTTL_V_"#mx), lval, vti>;
       def : TileLoadMaskPat<
           !cast<Intrinsic>("int_riscv_vmttl"#lsuf#"_mask"),
-          PseudoVMTTL_V_MASK, lval, vti>;
+          !cast<Instruction>("PseudoVMTTL_V_"#mx#"_MASK"), lval, vti>;
       def : TileStorePat<
-          !cast<Intrinsic>("int_riscv_vmtts"#lsuf), PseudoVMTTS_V, lval, vti>;
+          !cast<Intrinsic>("int_riscv_vmtts"#lsuf),
+          !cast<Instruction>("PseudoVMTTS_V_"#mx), lval, vti>;
       def : TileStoreMaskPat<
           !cast<Intrinsic>("int_riscv_vmtts"#lsuf#"_mask"),
-          PseudoVMTTS_V_MASK, lval, vti>;
+          !cast<Instruction>("PseudoVMTTS_V_"#mx#"_MASK"), lval, vti>;
     }
   }
 }

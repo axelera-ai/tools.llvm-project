@@ -90,3 +90,60 @@ define <vscale x 1 x double> @test_vf8wmmacc_nxv1f64(<vscale x 1 x double> %c,
     iXLen %vl)
   ret <vscale x 1 x double> %r
 }
+
+; Non-widening vfmmacc.vv at EMUL_C ≠ LMUL — independent vd / vs1+vs2 register
+; group multipliers. Spot-check representative cells.
+
+declare <vscale x 4 x float> @llvm.riscv.vfmmacc.nxv4f32.nxv2f32(
+  <vscale x 4 x float>, <vscale x 2 x float>, <vscale x 2 x float>, iXLen)
+
+define <vscale x 4 x float> @test_vfmmacc_m2_lm1(<vscale x 4 x float> %c,
+                                                 <vscale x 2 x float> %a,
+                                                 <vscale x 2 x float> %b,
+                                                 iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_m2_lm1:
+; CHECK:       vfmmacc.vv v8, v10, v11
+; CHECK:       ret
+  %r = call <vscale x 4 x float> @llvm.riscv.vfmmacc.nxv4f32.nxv2f32(
+    <vscale x 4 x float> %c,
+    <vscale x 2 x float> %a,
+    <vscale x 2 x float> %b,
+    iXLen %vl)
+  ret <vscale x 4 x float> %r
+}
+
+declare <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv8f32(
+  <vscale x 2 x float>, <vscale x 8 x float>, <vscale x 8 x float>, iXLen)
+
+define <vscale x 2 x float> @test_vfmmacc_m1_lm4(<vscale x 2 x float> %c,
+                                                 <vscale x 8 x float> %a,
+                                                 <vscale x 8 x float> %b,
+                                                 iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_m1_lm4:
+; CHECK:       vfmmacc.vv v8, v12, v16
+; CHECK:       ret
+  %r = call <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv8f32(
+    <vscale x 2 x float> %c,
+    <vscale x 8 x float> %a,
+    <vscale x 8 x float> %b,
+    iXLen %vl)
+  ret <vscale x 2 x float> %r
+}
+
+declare <vscale x 16 x float> @llvm.riscv.vfmmacc.nxv16f32.nxv16f32(
+  <vscale x 16 x float>, <vscale x 16 x float>, <vscale x 16 x float>, iXLen)
+
+define <vscale x 16 x float> @test_vfmmacc_m8_lm8(<vscale x 16 x float> %c,
+                                                  <vscale x 16 x float> %a,
+                                                  <vscale x 16 x float> %b,
+                                                  iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_m8_lm8:
+; CHECK:       vfmmacc.vv v8, v16, v24
+; CHECK:       ret
+  %r = call <vscale x 16 x float> @llvm.riscv.vfmmacc.nxv16f32.nxv16f32(
+    <vscale x 16 x float> %c,
+    <vscale x 16 x float> %a,
+    <vscale x 16 x float> %b,
+    iXLen %vl)
+  ret <vscale x 16 x float> %r
+}

@@ -7,12 +7,44 @@
 
 #include <riscv_vector.h>
 
-// CHECK-LABEL: define dso_local <vscale x 2 x float> @test_vfmmacc_vv_f32m1
+// FP non-widening MAC: EMUL_C ∈ {1,2,4,8} × LMUL ∈ {1,2,4,8} cross-product.
+
+// CHECK-LABEL: define dso_local <vscale x 2 x float> @test_vfmmacc_vv_f32m1_lm1
 // CHECK-SAME:    (<vscale x 2 x float> [[VD:%.*]], <vscale x 2 x float> [[VS1:%.*]], <vscale x 2 x float> [[VS2:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
 // CHECK:         [[TMP0:%.*]] = tail call <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv2f32.i64(<vscale x 2 x float> [[VD]], <vscale x 2 x float> [[VS1]], <vscale x 2 x float> [[VS2]], i64 [[VL]])
 // CHECK-NEXT:    ret <vscale x 2 x float> [[TMP0]]
 //
-vfloat32m1_t test_vfmmacc_vv_f32m1(vfloat32m1_t vd, vfloat32m1_t vs1,
-                                   vfloat32m1_t vs2, size_t vl) {
-  return __riscv_vfmmacc_vv_f32m1(vd, vs1, vs2, vl);
+vfloat32m1_t test_vfmmacc_vv_f32m1_lm1(vfloat32m1_t vd, vfloat32m1_t vs1,
+                                       vfloat32m1_t vs2, size_t vl) {
+  return __riscv_vfmmacc_vv_f32m1_lm1(vd, vs1, vs2, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 4 x float> @test_vfmmacc_vv_f32m2_lm1
+// CHECK-SAME:    (<vscale x 4 x float> [[VD:%.*]], <vscale x 2 x float> [[VS1:%.*]], <vscale x 2 x float> [[VS2:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 4 x float> @llvm.riscv.vfmmacc.nxv4f32.nxv2f32.i64(<vscale x 4 x float> [[VD]], <vscale x 2 x float> [[VS1]], <vscale x 2 x float> [[VS2]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 4 x float> [[TMP0]]
+//
+vfloat32m2_t test_vfmmacc_vv_f32m2_lm1(vfloat32m2_t vd, vfloat32m1_t vs1,
+                                       vfloat32m1_t vs2, size_t vl) {
+  return __riscv_vfmmacc_vv_f32m2_lm1(vd, vs1, vs2, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 2 x float> @test_vfmmacc_vv_f32m1_lm4
+// CHECK-SAME:    (<vscale x 2 x float> [[VD:%.*]], <vscale x 8 x float> [[VS1:%.*]], <vscale x 8 x float> [[VS2:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 2 x float> @llvm.riscv.vfmmacc.nxv2f32.nxv8f32.i64(<vscale x 2 x float> [[VD]], <vscale x 8 x float> [[VS1]], <vscale x 8 x float> [[VS2]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 2 x float> [[TMP0]]
+//
+vfloat32m1_t test_vfmmacc_vv_f32m1_lm4(vfloat32m1_t vd, vfloat32m4_t vs1,
+                                       vfloat32m4_t vs2, size_t vl) {
+  return __riscv_vfmmacc_vv_f32m1_lm4(vd, vs1, vs2, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 16 x float> @test_vfmmacc_vv_f32m8_lm8
+// CHECK-SAME:    (<vscale x 16 x float> [[VD:%.*]], <vscale x 16 x float> [[VS1:%.*]], <vscale x 16 x float> [[VS2:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
+// CHECK:         [[TMP0:%.*]] = tail call <vscale x 16 x float> @llvm.riscv.vfmmacc.nxv16f32.nxv16f32.i64(<vscale x 16 x float> [[VD]], <vscale x 16 x float> [[VS1]], <vscale x 16 x float> [[VS2]], i64 [[VL]])
+// CHECK-NEXT:    ret <vscale x 16 x float> [[TMP0]]
+//
+vfloat32m8_t test_vfmmacc_vv_f32m8_lm8(vfloat32m8_t vd, vfloat32m8_t vs1,
+                                       vfloat32m8_t vs2, size_t vl) {
+  return __riscv_vfmmacc_vv_f32m8_lm8(vd, vs1, vs2, vl);
 }

@@ -127,60 +127,82 @@ let RequiredFeatures = ["experimental-zvvmm"],
   def vsetlambda : RVVBuiltin<"", "zKz", "i">;
 
 //===----------------------------------------------------------------------===//
-// Zvvmm: integer matrix multiply-accumulate
-//===----------------------------------------------------------------------===//
-
-// Matrix multiply-accumulate is never masked (the encoding requires vm=1)
-// and exposes no per-instruction policy operand — vta/vma come from vtype.
+// Zvvmm / Zvvfmm: non-widening matrix multiply-accumulate (vmmacc.vv,
+// vfmmacc.vv).
+//
+// The IME spec models two independent register-group axes for matrix MAC:
+//   * vd  uses EMUL_C = VLEN / (SEW(C) * lambda^2)  — independent of LMUL.
+//   * vs1, vs2 use vtype.LMUL.
+// We expose the full EMUL_C ∈ {1,2,4,8} × LMUL ∈ {1,2,4,8} cross product as
+// 16 builtins per MAC, named `__riscv_v(f)mmacc_vv_<sew>m{EMUL_C}_lm{LMUL}`
+// per the IME C-naming convention (see [[zvvm-mac-lmul-naming]]). The C-tile
+// shape suffix `m{EMUL_C}` is emitted by the standard RVV emitter from
+// `Log2LMUL = [cLog2]`; the trailing `_lm{LMUL}` is appended via the explicit
+// `Name=` field. Vs1/vs2's prototype uses the existing per-operand
+// `(S/SE/L)FixedLog2LMUL:N` transformer to pin them to the LMUL-sized type
+// independently of vd's Log2LMUL.
+//
+// Matrix multiply-accumulate is never masked (encoding requires vm=1) and
+// exposes no per-instruction policy operand — vta/vma come from vtype.
 // vd is read+written, so the builtin's first vector argument is the
 // passthrough accumulator.
+//
+// Widening MACs (vwmmacc / vqmmacc / v8wmmacc and the FP siblings) are
+// deferred: they additionally need varying SEW(A) ≠ SEW(C) on top of
+// EMUL_C ≠ LMUL.
+//===----------------------------------------------------------------------===//
 
-let RequiredFeatures = ["experimental-zvvmm"],
-    HasMasked = false,
-    UnMaskedPolicyScheme = NonePolicy,
-    Log2LMUL = [0],
-    // The IR intrinsic has two independent vector-type overloads: C (the
-    // accumulator, == return type, index -1) and A/B (operand 1).
-    IntrinsicTypes = [-1, 1],
-    IRName = "vmmacc" in {
-  // vmmacc.vv — W = 1, A/B and C all have the same SEW.
-  //
-  // Generated C signature for TypeRange "i", LMUL=1:
-  //   vint32m1_t __riscv_vmmacc_vv_i32m1(vint32m1_t vd, vint32m1_t vs1,
-  //                                       vint32m1_t vs2, size_t vl);
-  def vmmacc_vv : RVVBuiltin<"v", "vvvv", "i">;
+// Select the right per-operand Log2LMUL transformer based on the
+// (cLog2, abLog2) relationship — the underlying transformers are constrained:
+//   SFixedLog2LMUL  requires target < builtin
+//   SEFixedLog2LMUL requires target ≤ builtin
+//   LFixedLog2LMUL  requires target > builtin
+class ABLog2LMULTransformer<int cLog2, int abLog2> {
+  string Str = !cond(!lt(abLog2, cLog2): "(SFixedLog2LMUL:"#abLog2#")",
+                     !eq(abLog2, cLog2): "(SEFixedLog2LMUL:"#abLog2#")",
+                     !gt(abLog2, cLog2): "(LFixedLog2LMUL:"#abLog2#")");
 }
 
-//===----------------------------------------------------------------------===//
-// Zvvfmm: floating-point matrix multiply-accumulate.
-//
-// Matrix multiply-accumulate is never masked from the C surface: the
-// underlying encoding uses vm=1 (Phase 1 does not expose the vm=0 microscaled
-// MX* form). vta/vma come from vtype.
-//
-// Only the non-widening vfmmacc.vv is exposed at the Clang level in Phase 1.
-// The widening variants need vd (= EMUL_C) and vs1/vs2 (= LMUL) to be
-// independent — same EMUL_C ≠ LMUL gap that blocks the integer widening
-// builtins. They land alongside the integer widening builtins when that
-// coverage work is done.
-//===----------------------------------------------------------------------===//
+// Each (cLog2, abLog2) cell becomes one builtin. The C-API name encodes
+// both EMUL_C (= 2^cLog2, in the i32m{N} / f32m{N} segment) and LMUL
+// (= 2^abLog2, in the trailing _lm{N} segment) explicitly via the `Name`
+// field — Suffix is empty so the emitter does NOT append a type-derived
+// suffix. This is the only way to control the IME spec's ordering
+// (`<type>_lm{LMUL}`) since the default auto-suffix produces
+// `<name>_<type>`, not `<name>_<typewithLMUL>`. Each builtin is therefore
+// fully qualified at the C-API layer; `OverloadedName` is set equal to
+// `Name` to disable generic-name overload resolution, which would
+// otherwise erase the LMUL distinction.
+foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
+  foreach abLog2 = [0, 1, 2, 3] in {  // LMUL   ∈ {1,2,4,8}
+    defvar abTfm  = ABLog2LMULTransformer<cLog2, abLog2>.Str;
+    defvar emul_c = !shl(1, cLog2);
+    defvar lmul   = !shl(1, abLog2);
+    defvar intName = "vmmacc_vv_i32m" # emul_c # "_lm" # lmul;
+    defvar fpName  = "vfmmacc_vv_f32m" # emul_c # "_lm" # lmul;
 
-let RequiredFeatures = ["experimental-zvvfmm"],
-    HasMasked = false,
-    UnMaskedPolicyScheme = NonePolicy,
-    Log2LMUL = [0],
-    // The IR intrinsic has two independent vector-type overloads: C (the
-    // accumulator, == return type, index -1) and A/B (operand 1).
-    IntrinsicTypes = [-1, 1],
-    IRName = "vfmmacc" in {
-  // vfmmacc.vv — W = 1, A/B and C all have the same SEW.
-  //
-  // Generated C signature for TypeRange "f", LMUL=1:
-  //   vfloat32m1_t __riscv_vfmmacc_vv_f32m1(vfloat32m1_t vd,
-  //                                          vfloat32m1_t vs1,
-  //                                          vfloat32m1_t vs2,
-  //                                          size_t vl);
-  def vfmmacc_vv : RVVBuiltin<"v", "vvvv", "f">;
+    let RequiredFeatures = ["experimental-zvvmm"],
+        HasMasked = false,
+        UnMaskedPolicyScheme = NonePolicy,
+        Log2LMUL = [cLog2],
+        // IR intrinsic has two independent vector-type overloads: C
+        // (return type, index -1) and A/B (Ops[1]).
+        IntrinsicTypes = [-1, 1],
+        Name = intName,
+        OverloadedName = intName,
+        IRName = "vmmacc" in
+      def : RVVBuiltin<"", "vv"#abTfm#"v"#abTfm#"v", "i">;
+
+    let RequiredFeatures = ["experimental-zvvfmm"],
+        HasMasked = false,
+        UnMaskedPolicyScheme = NonePolicy,
+        Log2LMUL = [cLog2],
+        IntrinsicTypes = [-1, 1],
+        Name = fpName,
+        OverloadedName = fpName,
+        IRName = "vfmmacc" in
+      def : RVVBuiltin<"", "vv"#abTfm#"v"#abTfm#"v", "f">;
+  }
 }
 
 //===----------------------------------------------------------------------===//
@@ -213,9 +235,15 @@ let RequiredFeatures = ["experimental-zvvfmm"],
 // override vtype.lambda for the duration of the instruction via the per-
 // instruction Lλ field in the encoding; the matching IR intrinsics are
 // int_riscv_vmtl_l{1,2,4,8,16,32,64} and friends.
+//
+// Log2LMUL = [0,1,2,3] expands the C-surface to LMUL ∈ {1,2,4,8}, i.e.
+// `__riscv_vmtl_v_<T>m{1,2,4,8}` (and the same for the `_l{N}` variants).
+// Fractional LMUL is spec-reserved for the IME family. Tile L/S has only
+// one tile, so there's no EMUL_C ≠ LMUL distinction: A/B/C-agnostic loads
+// scale uniformly with vtype.LMUL.
 let HasMasked = false,
     UnMaskedPolicyScheme = HasPassthruOperand,
-    Log2LMUL = [0] in {
+    Log2LMUL = [0, 1, 2, 3] in {
   let RequiredFeatures = ["experimental-zvvmtls"],
       Name = "vmtl_v",
       IRName = "vmtl" in
@@ -241,9 +269,11 @@ let HasMasked = false,
 }
 
 // Tile store: builtin order is (ptr, ld, vec, vl), IR intrinsic order is
-// (vec, ptr, ld, vl). Rotate to match the IR shape.
+// (vec, ptr, ld, vl). Rotate to match the IR shape. The rotation is operand-
+// order-only and is LMUL-agnostic; Log2LMUL = [0,1,2,3] exposes the same
+// rotation for every LMUL ∈ {1,2,4,8}.
 let HasMasked = false,
-    Log2LMUL = [0],
+    Log2LMUL = [0, 1, 2, 3],
     ManualCodegen = [{
       // Builtin: (ptr, ld, value, vl). Intrinsic: (value, ptr, ld, vl).
       std::rotate(Ops.begin(), Ops.begin() + 2, Ops.begin() + 3);
