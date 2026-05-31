@@ -588,6 +588,15 @@ static bool isSignExtendedW(Register SrcReg, const RISCVSubtarget &ST,
         return false;
       break;
 
+    case RISCV::LD: {
+      if (MI->hasOneMemOperand() && !(*MI->memoperands_begin())->isVolatile() &&
+          hasAllWUsers(*MI, ST, MRI)) {
+        FixableDef.insert(MI);
+        break;
+      }
+      return false;
+    }
+
     // With these opcode, we can "fix" them with the W-version
     // if we know all users of the result only rely on bits 31:0
     case RISCV::SLLI:
@@ -597,7 +606,6 @@ static bool isSignExtendedW(Register SrcReg, const RISCVSubtarget &ST,
       [[fallthrough]];
     case RISCV::ADDI:
     case RISCV::ADD:
-    case RISCV::LD:
     case RISCV::LWU:
     case RISCV::MUL:
     case RISCV::SUB:
@@ -744,6 +752,10 @@ bool RISCVOptWInstrs::appendWSuffixes(MachineFunction &MF,
         WOpc = RISCV::SLLIW;
         break;
       case RISCV::LD:
+        if (!MI.hasOneMemOperand() || (*MI.memoperands_begin())->isVolatile())
+          continue;
+        WOpc = RISCV::LW;
+        break;
       case RISCV::LWU:
         WOpc = RISCV::LW;
         break;
