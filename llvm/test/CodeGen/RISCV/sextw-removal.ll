@@ -1500,3 +1500,20 @@ bb7:                                              ; preds = %bb2
 }
 
 declare i32 @llvm.riscv.vmv.x.s.nxv1i32( <vscale x 1 x i32>)
+
+define signext i32 @test_volatile_ld(ptr %p) {
+; CHECK-LABEL: test_volatile_ld:
+; CHECK:       # %bb.0:
+; CHECK-NEXT:    ld a0, 0(a0)
+; CHECK-NEXT:    sext.w a0, a0
+; CHECK-NEXT:    ret
+;
+; NOREMOVAL-LABEL: test_volatile_ld:
+; NOREMOVAL:       # %bb.0:
+; NOREMOVAL-NEXT:    ld a0, 0(a0)
+; NOREMOVAL-NEXT:    sext.w a0, a0
+; NOREMOVAL-NEXT:    ret
+  %1 = load volatile i64, ptr %p, align 8
+  %2 = trunc i64 %1 to i32
+  ret i32 %2
+}
