@@ -391,6 +391,16 @@ RISCVVSETVLIInfoAnalysis::getInfoForVSETVLI(const MachineInstr &MI) const {
   } else if (MI.getOpcode() == RISCV::PseudoVSETVL_MATRIX) {
     // Zvvm register-form vsetvl carries the full XLen-wide vtype as an
     // immediate; AVL comes from operand 1.
+    //
+    // The tracked lambda is the *requested* encoding from the immediate:
+    // per the IME spec, hardware WARL-canonicalizes an unsupported nonzero
+    // request to the largest supported value <= the request (or the
+    // smallest supported one when none is), and treats a zero request as
+    // preserve-or-initialize. Tracking the request is sound because
+    // canonicalization is a deterministic function of (request, VLEN, SEW)
+    // — equal tracked states arise from equal emitted requests and thus
+    // equal hardware states — and the pass never derives a specific
+    // hardware lambda from a tracked value of 0.
     Register AVLReg = MI.getOperand(1).getReg();
     VNInfo *VNI = getVNInfoFromReg(AVLReg, MI, LIS);
     NewInfo.setAVLRegDef(VNI, AVLReg);
