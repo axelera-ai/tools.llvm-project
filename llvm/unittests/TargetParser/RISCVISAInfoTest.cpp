@@ -1399,6 +1399,71 @@ Experimental extensions
     zvfofp8min           0.2
     zvkgs                0.7
     zvqdotq              0.0
+    zvvbf16fp32mm        0.1
+    zvvbf16fp64mm        0.1
+    zvvbf16mm            0.1
+    zvvfmm               0.1
+    zvvfp16fp32mm        0.1
+    zvvfp16fp64mm        0.1
+    zvvfp16mm            0.1
+    zvvfp32fp64mm        0.1
+    zvvfp32mm            0.1
+    zvvfp64mm            0.1
+    zvvi16i32mm          0.1
+    zvvi16i64mm          0.1
+    zvvi16mm             0.1
+    zvvi32i64mm          0.1
+    zvvi32mm             0.1
+    zvvi4i16mm           0.1
+    zvvi4i32mm           0.1
+    zvvi4i8mm            0.1
+    zvvi64mm             0.1
+    zvvi8i16mm           0.1
+    zvvi8i32mm           0.1
+    zvvi8i64mm           0.1
+    zvvi8mm              0.1
+    zvvmm                0.1
+    zvvmtls              0.1
+    zvvmttls             0.1
+    zvvofp4bf16mm        0.1
+    zvvofp4fp16mm        0.1
+    zvvofp4fp32mm        0.1
+    zvvofp4ofp8mm        0.1
+    zvvofp8bf16mm        0.1
+    zvvofp8fp16mm        0.1
+    zvvofp8fp32mm        0.1
+    zvvofp8fp64mm        0.1
+    zvvofp8mm            0.1
+    zvvxi4bf16mm         0.1
+    zvvxi4fp16mm         0.1
+    zvvxi4fp32mm         0.1
+    zvvxi8bf16mm         0.1
+    zvvxi8fp16mm         0.1
+    zvvxi8fp32mm         0.1
+    zvvxi8fp64mm         0.1
+    zvvxni4bf16mm        0.1
+    zvvxni4fp16mm        0.1
+    zvvxni4fp32mm        0.1
+    zvvxni8bf16mm        0.1
+    zvvxni8fp16mm        0.1
+    zvvxni8fp32mm        0.1
+    zvvxni8fp64mm        0.1
+    zvvxnofp4bf16mm      0.1
+    zvvxnofp4fp16mm      0.1
+    zvvxnofp4fp32mm      0.1
+    zvvxnofp4ofp8mm      0.1
+    zvvxnofp8bf16mm      0.1
+    zvvxnofp8fp16mm      0.1
+    zvvxnofp8fp32mm      0.1
+    zvvxnofp8fp64mm      0.1
+    zvvxofp4bf16mm       0.1
+    zvvxofp4fp16mm       0.1
+    zvvxofp4fp32mm       0.1
+    zvvxofp4ofp8mm       0.1
+    zvvxofp8bf16mm       0.1
+    zvvxofp8fp16mm       0.1
+    zvvxofp8fp32mm       0.1
+    zvvxofp8fp64mm       0.1
     smpmpmt              0.6
     svukte               0.3
     xrivosvisni          0.1
