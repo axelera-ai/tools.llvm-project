@@ -450,6 +450,7 @@ enum MatrixPseudoKind : uint8_t {
   TileLoadMask = 2,
   TileStore = 3,
   TileStoreMask = 4,
+  MACScaled = 5,
 };
 
 struct MatrixPseudoInfo {

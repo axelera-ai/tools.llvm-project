@@ -833,6 +833,13 @@ def ZZZ_VRMF2NoV0 : VReg<VMF2VTs, (add VRNoV0), 1>;
 
 def VMV0 : VReg<VMaskVTs, (add V0), 1>;
 
+// V0 as a data register holding the Zvvm/IME paired E8M0 block scales
+// (16-bit scale pairs, one full register: vuint16m1_t). The microscaled
+// (vm=0) matrix multiply-accumulate pseudos take their scale operand in this
+// class so register allocation places the value in v0, mirroring how VMV0
+// carries mask operands.
+def VMV0Pair : VReg<[nxv4i16], (add V0), 1>;
+
 // The register class is added for inline assembly for vector mask types.
 // The ZZZ_ prefix is to make sure these are ordered after VR/VRNoV0 in the
 // regclass enum. Tablegen uses the name to break ties. This is important
