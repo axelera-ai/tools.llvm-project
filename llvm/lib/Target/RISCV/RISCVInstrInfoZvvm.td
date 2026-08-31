@@ -22,14 +22,41 @@
 // Real instruction class (encoded form, used by the assembler / disassembler).
 //===----------------------------------------------------------------------===//
 
+// The `v0.scale` operand of the microscaled (vm=0) MAC forms. Parsed from
+// the literal token "v0.scale" and always the V0 register; encoded via the
+// vm bit exactly like a mask operand (V0 -> vm=0). Mirrors VMaskOp /
+// VMaskCarryInOp from RISCVInstrInfoV.td.
+def VScaleAsmOperand : AsmOperandClass {
+  let Name = "RVVScaleRegOpOperand";
+  let RenderMethod = "addRegOperands";
+  let PredicateMethod = "isV0Reg";
+  let ParserMethod = "parseVScaleReg";
+  let DiagnosticType = "InvalidVScaleRegister";
+  let DiagnosticString = "operand must be v0.scale";
+}
+
+def VScaleOp : RegisterOperand<VMV0> {
+  let ParserMatchClass = VScaleAsmOperand;
+  let PrintMethod = "printVScaleReg";
+  let EncoderMethod = "getVMaskReg";
+  // Deliberately no DecoderMethod: the default VMV0 register-class decoder
+  // accepts only encoding 0 (= V0, vm=0). A vm=1 word therefore fails to
+  // decode as a scaled form and falls through to the unscaled (vm=1
+  // hardcoded) sibling def, keeping disassembly deterministic.
+}
+
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0 in {
 // op vd, vs1, vs2
 //   vd is read-modified-written (tied operand).
-//   vm is hardcoded to 1: for integer Mm-acc the encoding requires it; for
-//   FP Mm-acc the spec uses vm=0 to switch to microscaled MX* operation,
-//   which Phase 1 does not expose.
+//   vm is hardcoded to 1 (the unscaled form). The vm=0 encodings are the
+//   microscaled MX forms and are separate instruction defs below: for the
+//   FP widening MACs vm=0 is the same mnemonic with a trailing `v0.scale`
+//   operand; for the integer widening MAC opcodes vm=0 encodes the distinct
+//   integer-input FP-accumulate mnemonics vfwimmacc.vv / vfqimmacc.vv /
+//   vf8wimmacc.vv. vm=0 remains reserved (undefined) for vmmacc.vv and
+//   vfmmacc.vv.
 // Encoding (OP-V major opcode):
-//   [31:26] = funct6, [25] = 1, [24:20] = vs2, [19:15] = vs1,
+//   [31:26] = funct6, [25] = vm, [24:20] = vs2, [19:15] = vs1,
 //   [14:12] = OPIVV (000) for integer / OPFVV (001) for FP, [11:7] = vd,
 //   [6:0] = OP-V (0b1010111).
 class RVInstVMatrixMACOp<bits<6> funct6, RISCVVFormat opv, string opcodestr>
@@ -45,6 +72,19 @@ class RVInstVMatrixMAC<bits<6> funct6, string opcodestr>
 
 class RVInstVFMatrixMAC<bits<6> funct6, string opcodestr>
     : RVInstVMatrixMACOp<funct6, OPFVV, opcodestr>;
+
+// Microscaled (vm=0) MAC form: op vd, vs1, vs2, v0.scale
+//   The mandatory trailing VScaleOp operand is always V0 and drives the vm
+//   bit through getVMaskReg (V0 -> 0), following the VALUmVV (vadc.vvm)
+//   carry-in precedent. Paired E8M0 block scales are read from v0; the
+//   block size comes from vtype.bs.
+class RVInstVMatrixMACScaleOp<bits<6> funct6, RISCVVFormat opv,
+                              string opcodestr>
+    : RVInstVV<funct6, opv, (outs VR:$vd_wb),
+               (ins VR:$vd, VR:$vs1, VR:$vs2, VScaleOp:$vm),
+               opcodestr, "$vd, $vs1, $vs2$vm"> {
+  let Constraints = "$vd = $vd_wb";
+}
 } // hasSideEffects = 0, mayLoad = 0, mayStore = 0
 
 //===----------------------------------------------------------------------===//
@@ -264,8 +304,9 @@ foreach row = ZvvmIntMACRows in {
 //   vfwmmacc.vv   funct6 = 0b010101 (0x15)
 //   vfqmmacc.vv   funct6 = 0b010110 (0x16)
 //   vf8wmmacc.vv  funct6 = 0b010111 (0x17)
-// All share funct3 = OPFVV (0b001) and have vm hardcoded to 1 (Phase 1 does
-// not encode the vm=0 microscaled MX* form).
+// All share funct3 = OPFVV (0b001). vm=1 is the normal unscaled form; vm=0
+// selects the microscaled MX form with paired E8M0 block scales in v0
+// (trailing `v0.scale` operand). vm=0 of vfmmacc.vv is reserved.
 //===----------------------------------------------------------------------===//
 
 let Predicates = [HasStdExtZvvfmm] in {
@@ -273,7 +314,39 @@ def VFMMACC_VV   : RVInstVFMatrixMAC<0b010100, "vfmmacc.vv">;
 def VFWMMACC_VV  : RVInstVFMatrixMAC<0b010101, "vfwmmacc.vv">;
 def VFQMMACC_VV  : RVInstVFMatrixMAC<0b010110, "vfqmmacc.vv">;
 def VF8WMMACC_VV : RVInstVFMatrixMAC<0b010111, "vf8wmmacc.vv">;
+
+// vm=0 microscaled siblings (same mnemonics, trailing v0.scale). Gated on
+// the family flag: the encodings belong to the same instructions (the spec's
+// "Included in" section lists Zvvfmm); whether a given (input format,
+// accumulator format, bs) combination is legal is an encoding-map / vtype
+// property checked at execution time, not at assembly time.
+def VFWMMACC_VV_SCALE  : RVInstVMatrixMACScaleOp<0b010101, OPFVV,
+                                                 "vfwmmacc.vv">;
+def VFQMMACC_VV_SCALE  : RVInstVMatrixMACScaleOp<0b010110, OPFVV,
+                                                 "vfqmmacc.vv">;
+def VF8WMMACC_VV_SCALE : RVInstVMatrixMACScaleOp<0b010111, OPFVV,
+                                                 "vf8wmmacc.vv">;
 } // Predicates = [HasStdExtZvvfmm]
+
+//===----------------------------------------------------------------------===//
+// Integer-input FP-accumulate microscaled MACs (MX-only instructions).
+//
+// These are the vm=0 encodings of the integer widening MAC opcodes:
+//   vfwimmacc.vv   funct6 = 0b111001 (vm=0 of vwmmacc.vv)
+//   vfqimmacc.vv   funct6 = 0b111010 (vm=0 of vqmmacc.vv)
+//   vf8wimmacc.vv  funct6 = 0b111011 (vm=0 of v8wmmacc.vv)
+// funct3 = OPIVV. MXINT inputs are always signed (altfmt_A/altfmt_B must be
+// 0); the accumulator is FP with the format selected by vtype.altfmt. The
+// mandatory trailing v0.scale operand supplies the paired E8M0 block scales.
+// vm=0 of vmmacc.vv (funct6 0b111000) remains reserved.
+//===----------------------------------------------------------------------===//
+
+let Predicates = [HasZvvmMXVfwimmacc] in
+def VFWIMMACC_VV  : RVInstVMatrixMACScaleOp<0b111001, OPIVV, "vfwimmacc.vv">;
+let Predicates = [HasZvvmMXVfqimmacc] in
+def VFQIMMACC_VV  : RVInstVMatrixMACScaleOp<0b111010, OPIVV, "vfqimmacc.vv">;
+let Predicates = [HasZvvmMXVf8wimmacc] in
+def VF8WIMMACC_VV : RVInstVMatrixMACScaleOp<0b111011, OPIVV, "vf8wimmacc.vv">;
 
 let Predicates = [HasStdExtZvvfmm] in {
 // Pseudo name: PseudoVF{,W,Q,8W}MMACC_VV_M{EMUL_C}_M{LMUL} (in that order).

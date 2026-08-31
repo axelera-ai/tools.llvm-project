@@ -922,6 +922,148 @@ def FeatureStdExtZvvfp64mm
           "FP64 Matrix Multiply-Accumulate",
           [FeatureStdExtZvvfmm, FeatureStdExtZve64d]>;
 
+// Microscaling (MX) extensions (spec tbl-mx-extensions). Each extension
+// enables the vm=0 / v0.scale encoding for one (input format, accumulator
+// format, block size) combination.
+//
+// Implication structure per the spec table:
+//   * An FP MX extension (Zvvxofp*) implies its base per-type extension
+//     (which in turn implies Zvvfmm and the Zve dependency).
+//   * A BS=16 extension (Zvvxn*) implies its BS=32 sibling (Zvvx*).
+//   * The integer MX extensions (Zvvxi* / Zvvxni*) imply NO base extension:
+//     vfwimmacc.vv / vfqimmacc.vv / vf8wimmacc.vv exist only in MX form (the
+//     vm=1 encoding of those opcodes is the integer-accumulate vwmmacc.vv /
+//     vqmmacc.vv / v8wmmacc.vv). They carry a direct Zve32f / Zve64d
+//     dependency matching their FP accumulator width.
+
+// FP microscaling, block size 32.
+def FeatureStdExtZvvxofp4ofp8mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=32), OFP8 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp4ofp8mm]>;
+def FeatureStdExtZvvxofp4fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=32), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp4fp16mm]>;
+def FeatureStdExtZvvxofp4bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=32), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp4bf16mm]>;
+def FeatureStdExtZvvxofp4fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=32), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp4fp32mm]>;
+def FeatureStdExtZvvxofp8fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=32), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp8fp16mm]>;
+def FeatureStdExtZvvxofp8bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=32), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp8bf16mm]>;
+def FeatureStdExtZvvxofp8fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=32), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp8fp32mm]>;
+def FeatureStdExtZvvxofp8fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=32), FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvofp8fp64mm]>;
+
+// FP microscaling, block size 16.
+def FeatureStdExtZvvxnofp4ofp8mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=16), OFP8 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp4ofp8mm]>;
+def FeatureStdExtZvvxnofp4fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=16), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp4fp16mm]>;
+def FeatureStdExtZvvxnofp4bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=16), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp4bf16mm]>;
+def FeatureStdExtZvvxnofp4fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP4 Inputs (BS=16), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp4fp32mm]>;
+def FeatureStdExtZvvxnofp8fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=16), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp8fp16mm]>;
+def FeatureStdExtZvvxnofp8bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=16), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp8bf16mm]>;
+def FeatureStdExtZvvxnofp8fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=16), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp8fp32mm]>;
+def FeatureStdExtZvvxnofp8fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXFP8 Inputs (BS=16), FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxofp8fp64mm]>;
+
+// Integer-input microscaling, block size 32.
+def FeatureStdExtZvvxi8fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=32), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve32f]>;
+def FeatureStdExtZvvxi8bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=32), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve32f]>;
+def FeatureStdExtZvvxi8fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=32), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve32f]>;
+def FeatureStdExtZvvxi8fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=32), FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve64d]>;
+def FeatureStdExtZvvxi4fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT4 Inputs (BS=32), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve32f]>;
+def FeatureStdExtZvvxi4bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT4 Inputs (BS=32), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve32f]>;
+def FeatureStdExtZvvxi4fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT4 Inputs (BS=32), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZve32f]>;
+
+// Integer-input microscaling, block size 16.
+def FeatureStdExtZvvxni8fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=16), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi8fp16mm]>;
+def FeatureStdExtZvvxni8bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=16), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi8bf16mm]>;
+def FeatureStdExtZvvxni8fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=16), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi8fp32mm]>;
+def FeatureStdExtZvvxni8fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT8 Inputs (BS=16), FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi8fp64mm]>;
+def FeatureStdExtZvvxni4fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT4 Inputs (BS=16), FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi4fp16mm]>;
+def FeatureStdExtZvvxni4bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT4 Inputs (BS=16), BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi4bf16mm]>;
+def FeatureStdExtZvvxni4fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "MXINT4 Inputs (BS=16), FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvxi4fp32mm]>;
+
 // Predicates for the per-type extensions whose ISel pattern rows exist.
 // (Extensions with no covered rows yet get their Has* predicates when the
 // corresponding rows land.)
@@ -936,6 +1078,47 @@ foreach ext = ["Zvvi8mm", "Zvvi16mm", "Zvvi32mm", "Zvvi64mm",
         AssemblerPredicate<
             (all_of !cast<SubtargetFeature>("FeatureStdExt"#ext)),
             "'"#ext#"' (IME per-type Matrix Multiply-Accumulate)">;
+
+// Single-flag predicates for the MX extensions whose ISel pattern rows exist
+// (the BS=16 flags need no separate predicates: `bs` is a vtype field, not an
+// encoding bit, so BS-16 rows share the BS-32 patterns).
+foreach ext = ["Zvvxi8fp16mm", "Zvvxi8fp32mm", "Zvvxi8fp64mm",
+               "Zvvxofp8fp16mm", "Zvvxofp8fp32mm", "Zvvxofp8fp64mm"] in
+  def "HasStdExt"#ext
+      : Predicate<"Subtarget->hasStdExt"#ext#"()">,
+        AssemblerPredicate<
+            (all_of !cast<SubtargetFeature>("FeatureStdExt"#ext)),
+            "'"#ext#"' (IME microscaling Matrix Multiply-Accumulate)">;
+
+// MC gating for the integer-input microscaled instructions. Unlike the FP
+// vm=0 forms (which belong to the same mnemonics as the vm=1 forms and are
+// therefore gated on the Zvvfmm family flag), vfwimmacc.vv / vfqimmacc.vv /
+// vf8wimmacc.vv exist ONLY in MX form: each is available when any of the MX
+// extensions from its "Included in" spec section is enabled. The BS=16 flags
+// imply their BS=32 siblings, so listing the BS=32 flags suffices.
+def HasZvvmMXVfwimmacc
+    : Predicate<"Subtarget->hasStdExtZvvxi8fp16mm() || "
+                "Subtarget->hasStdExtZvvxi8bf16mm()">,
+      AssemblerPredicate<(any_of FeatureStdExtZvvxi8fp16mm,
+                                 FeatureStdExtZvvxi8bf16mm),
+          "'Zvvxi8fp16mm' or 'Zvvxi8bf16mm' (MXINT8 Widening Matrix "
+          "Multiply-Accumulate)">;
+def HasZvvmMXVfqimmacc
+    : Predicate<"Subtarget->hasStdExtZvvxi4fp16mm() || "
+                "Subtarget->hasStdExtZvvxi4bf16mm() || "
+                "Subtarget->hasStdExtZvvxi8fp32mm()">,
+      AssemblerPredicate<(any_of FeatureStdExtZvvxi4fp16mm,
+                                 FeatureStdExtZvvxi4bf16mm,
+                                 FeatureStdExtZvvxi8fp32mm),
+          "'Zvvxi4fp16mm', 'Zvvxi4bf16mm' or 'Zvvxi8fp32mm' (MXINT "
+          "Quad-Widening Matrix Multiply-Accumulate)">;
+def HasZvvmMXVf8wimmacc
+    : Predicate<"Subtarget->hasStdExtZvvxi4fp32mm() || "
+                "Subtarget->hasStdExtZvvxi8fp64mm()">,
+      AssemblerPredicate<(any_of FeatureStdExtZvvxi4fp32mm,
+                                 FeatureStdExtZvvxi8fp64mm),
+          "'Zvvxi4fp32mm' or 'Zvvxi8fp64mm' (MXINT 8x-Widening Matrix "
+          "Multiply-Accumulate)">;
 
 // Vector Cryptography and Bitmanip Extensions
 

@@ -206,6 +206,7 @@ class RISCVAsmParser : public MCTargetAsmParser {
   ParseStatus parseJALOffset(OperandVector &Operands);
   ParseStatus parseVTypeI(OperandVector &Operands);
   ParseStatus parseMaskReg(OperandVector &Operands);
+  ParseStatus parseVScaleReg(OperandVector &Operands);
   ParseStatus parseInsnDirectiveOpcode(OperandVector &Operands);
   ParseStatus parseInsnCDirectiveOpcode(OperandVector &Operands);
   ParseStatus parseGPRAsFPR(OperandVector &Operands);
@@ -2514,6 +2515,29 @@ ParseStatus RISCVAsmParser::parseMaskReg(OperandVector &Operands) {
   StringRef Name = getLexer().getTok().getIdentifier();
   if (!Name.consume_back(".t"))
     return Error(getLoc(), "expected '.t' suffix");
+  MCRegister Reg = matchRegisterNameHelper(Name);
+
+  if (!Reg)
+    return ParseStatus::NoMatch;
+  if (Reg != RISCV::V0)
+    return ParseStatus::NoMatch;
+  SMLoc S = getLoc();
+  SMLoc E = getTok().getEndLoc();
+  getLexer().Lex();
+  Operands.push_back(RISCVOperand::createReg(Reg, S, E));
+  return ParseStatus::Success;
+}
+
+// Zvvm microscaled MAC scale operand: the literal token "v0.scale". Always
+// the V0 register; the vm bit encodes its presence (V0 -> vm=0), mirroring
+// parseMaskReg / "v0.t".
+ParseStatus RISCVAsmParser::parseVScaleReg(OperandVector &Operands) {
+  if (getLexer().isNot(AsmToken::Identifier))
+    return ParseStatus::NoMatch;
+
+  StringRef Name = getLexer().getTok().getIdentifier();
+  if (!Name.consume_back(".scale"))
+    return Error(getLoc(), "expected '.scale' suffix");
   MCRegister Reg = matchRegisterNameHelper(Name);
 
   if (!Reg)
