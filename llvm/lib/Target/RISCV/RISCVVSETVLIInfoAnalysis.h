@@ -218,8 +218,13 @@ class VSETVLIInfo {
   uint8_t SEWLMULRatioOnly : 1;
   uint8_t AltFmt : 1;
   uint8_t TWiden : 3;
-  // Zvvm matrix vtype fields (high end of vtype CSR; can only be written via
-  // the register-form `vsetvl`, never via `vsetvli`).
+  // Zvvm matrix vtype fields (high end of vtype CSR). Only the register-form
+  // `vsetvl` can write them directly; a vsetvli / vsetivli retains bs /
+  // altfmt_A / altfmt_B verbatim but may replace lambda when SEW changes
+  // (WARL re-canonicalization against the new (VLEN, SEW); support never
+  // depends on LMUL). Lambda is tracked as the *last requested* encoding;
+  // 0 means no specific value is known or requested — emitting lambda bits
+  // of 000 requests the IME preserve-or-initialize behavior.
   uint8_t Lambda : 3;
   uint8_t Bs : 1;
   uint8_t AltFmtA : 1;
@@ -422,10 +427,15 @@ public:
         RISCVVType::hasXSfmmWiden(VType) ? RISCVVType::getXSfmmWiden(VType) : 0;
     // The Zvvm matrix fields (lambda / bs / altfmt_A / altfmt_B) sit outside
     // the 11-bit immediate of vsetvli / vsetivli and are not encoded in
-    // `VType` here; leave them at their current value. The IME spec allows
-    // hardware to WARL-re-clamp lambda when SEW or LMUL changes, but does
-    // not require vsetvli to zero the matrix fields, so callers that need
-    // the full vtype state should write it via setMatrixVTYPE.
+    // `VType` here; leave them at their current value. Per the IME spec,
+    // hardware retains bs / altfmt_A / altfmt_B verbatim across a vsetvli /
+    // vsetivli, and preserves lambda when it is still supported for the
+    // resulting (VLEN, SEW) — re-canonicalizing it to the largest supported
+    // value otherwise (support never depends on LMUL, so LMUL-only changes
+    // never alter lambda). Callers modeling a vtype write that may change
+    // SEW must therefore treat lambda as may-DEF'd; see
+    // RISCVInsertVSETVLI::transferBefore / transferAfter. Full-vtype writes
+    // (register-form vsetvl) go through setMatrixVTYPE instead.
   }
   // Extract all vtype fields (including the Zvvm matrix fields at the high
   // end) from a full XLen-wide vtype constant — used when interpreting a
