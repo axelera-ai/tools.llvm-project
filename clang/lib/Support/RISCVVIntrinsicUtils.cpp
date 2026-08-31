@@ -114,7 +114,10 @@ bool RVVType::verifyType() const {
     return false;
   if (IsTuple && (NF == 1 || NF > 8))
     return false;
-  if (IsTuple && (1 << std::max(0, LMUL.Log2LMUL)) * NF > 8)
+  // Zvlsseg segment tuples require NF x LMUL <= 8. The single exception is
+  // the IME (Zvvm) m16 accumulator: a pair of M8 groups (NF=2, LMUL=8),
+  // spelled v<elt>m16_t rather than the segment-style m8x2 (see isIMEM16()).
+  if (IsTuple && (1 << std::max(0, LMUL.Log2LMUL)) * NF > 8 && !isIMEM16())
     return false;
   unsigned V = *Scale;
   switch (ElementBitwidth) {
@@ -257,8 +260,10 @@ void RVVType::initClangBuiltinStr() {
   default:
     llvm_unreachable("ScalarTypeKind is invalid");
   }
-  ClangBuiltinStr += utostr(ElementBitwidth) + LMUL.str() +
-                     (IsTuple ? "x" + utostr(NF) : "") + "_t";
+  ClangBuiltinStr += utostr(ElementBitwidth) +
+                     (isIMEM16() ? "m16"
+                                 : LMUL.str() + (IsTuple ? "x" + utostr(NF) : "")) +
+                     "_t";
 }
 
 void RVVType::initTypeStr() {
@@ -270,8 +275,10 @@ void RVVType::initTypeStr() {
   auto getTypeString = [&](StringRef TypeStr) {
     if (isScalar())
       return Twine(TypeStr + Twine(ElementBitwidth) + "_t").str();
-    return Twine("v" + TypeStr + Twine(ElementBitwidth) + LMUL.str() +
-                 (IsTuple ? "x" + utostr(NF) : "") + "_t")
+    return Twine("v" + TypeStr + Twine(ElementBitwidth) +
+                 (isIMEM16() ? "m16"
+                             : LMUL.str() + (IsTuple ? "x" + utostr(NF) : "")) +
+                 "_t")
         .str();
   };
 
@@ -364,6 +371,10 @@ void RVVType::initShortStr() {
     break;
   default:
     llvm_unreachable("Unhandled case!");
+  }
+  if (isIMEM16()) {
+    ShortStr += "m16";
+    return;
   }
   if (isVector())
     ShortStr += LMUL.str();
