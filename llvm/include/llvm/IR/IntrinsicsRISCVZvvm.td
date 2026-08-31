@@ -27,15 +27,19 @@ let TargetPrefix = "riscv" in {
   //   VLMUL    — 3-bit: 0=m1, 1=m2, 2=m4, 3=m8, 5=mf8, 6=mf4, 7=mf2.
   //   VTA      — 1 bit, tail-agnostic policy.
   //   VMA      — 1 bit, mask-agnostic policy.
-  //   LAMBDA   — 3 bits, written directly into vtype.lambda. Per the IME
-  //              spec the encoding is 0=invalid/dynamic (the next matrix
-  //              multiply-accumulate will fault), 1=L1, 2=L2, 3=L4, 4=L8,
-  //              5=L16, 6=L32, 7=L64. The field is WARL: hardware may clamp
-  //              an unsupported request to the largest supported value for
-  //              the current (VLEN, SEW, LMUL); software should read
-  //              vtype.lambda back to detect clamping. This intrinsic does
-  //              NOT preserve any prior vtype.lambda — to keep a previously
-  //              programmed lambda, pass the same value here.
+  //   LAMBDA   — 3 bits, supplied as the vtype.lambda write request. Per the
+  //              IME spec the encoding is 1=L1, 2=L2, 3=L4, 4=L8, 5=L16,
+  //              6=L32, 7=L64, and 0 is a preserve-or-initialize request:
+  //              hardware retains the current lambda if it is supported for
+  //              the resulting (VLEN, SEW) configuration, otherwise selects
+  //              the largest supported nonzero value (only outside the
+  //              IME-legal domain does the field remain 000). A nonzero
+  //              request is WARL-canonicalized: if unsupported, hardware
+  //              selects the largest supported value less than or equal to
+  //              the request, or the smallest supported value when none is.
+  //              Lambda support is a function of (VLEN, SEW) only — never
+  //              LMUL. Software should read vtype.lambda back to observe the
+  //              established value.
   //   BS       — 1 bit, microscaling block size (0 = 32 elem, 1 = 16 elem).
   //   ALTFMT_A — 1 bit, A operand signedness/format selector.
   //   ALTFMT_B — 1 bit, B operand signedness/format selector.
@@ -65,18 +69,24 @@ let TargetPrefix = "riscv" in {
   // §"Establishing lambda from C").
   //
   // The intrinsics operate on the 3-bit `vtype.lambda` encoding directly
-  // (0 = not-configured / dynamic, 1..7 = L1, L2, L4, L8, L16, L32, L64).
-  // The user-facing power-of-two value (1, 2, 4, 8, 16, 32, 64) is converted
-  // to/from this encoding by the Clang IR-gen layer; keeping the IR shape in
-  // encoding form makes the pseudo-expansion branchless.
+  // (0 = preserve-or-initialize request, 1..7 = L1, L2, L4, L8, L16, L32,
+  // L64). The user-facing power-of-two value (0, 1, 2, 4, 8, 16, 32, 64) is
+  // converted to/from this encoding by the Clang IR-gen layer.
   //===--------------------------------------------------------------------===//
 
-  // Write `vtype.lambda` to `encoding` (an ImmArg in 1..7) and return the
-  // post-WARL-clamp established encoding. Preserves SEW, LMUL, vta, vma, bs,
+  // Submit `encoding` as a vtype.lambda write request and return the
+  // established (post-WARL) encoding. Preserves SEW, LMUL, vta, vma, bs,
   // altfmt_A, altfmt_B and vl per the spec contract.
   //
-  // The encoding == 0 case (read-only query) is handled by the separate
-  // `int_riscv_query_lambda` intrinsic.
+  // `encoding` may be a runtime value; values outside 0..7 are undefined
+  // behavior at this interface (the pseudo-expansion masks the register form
+  // to 3 bits defensively). Encoding 0 is the spec's preserve-or-initialize
+  // request: hardware retains a supported current lambda, otherwise selects
+  // the largest supported nonzero value for the current (VLEN, SEW)
+  // configuration — it is a write, not a read; use `int_riscv_query_lambda`
+  // for a pure read. A nonzero unsupported request is canonicalized to the
+  // largest supported value <= the request, or the smallest supported value
+  // when none is. Lambda support depends on (VLEN, SEW) only — never LMUL.
   //
   // IntrNoMem mirrors the int_riscv_vsetvli convention (vtype is not part of
   // the IR memory model). At the machine level, the lowered pseudo carries
@@ -85,9 +95,7 @@ let TargetPrefix = "riscv" in {
   def int_riscv_vsetlambda
       : DefaultAttrsIntrinsic<[llvm_anyint_ty],
                               [LLVMMatchType<0>], // encoding
-                              [IntrNoMem,
-                               ImmArg<ArgIndex<0>>,
-                               Range<ArgIndex<0>, 1, 8>]>;
+                              [IntrNoMem]>;
 
   // Read the current `vtype.lambda` encoding (0..7) without writing vtype.
   // Pure read of `vtype`; the spec contract is that this intrinsic does not
@@ -157,10 +165,13 @@ let TargetPrefix = "riscv" in {
   // The lambda override (3-bit immediate at bits[31:29] of the instruction) is
   // not an IR operand: each lambda value gets its own intrinsic per the chosen
   // naming scheme. The base intrinsic name uses vtype.lambda; `_l1` ... `_l64`
-  // suffixes select an explicit Lλ override. The override is WARL just like
-  // vtype.lambda — hardware may clamp it down for the current (VLEN, SEW,
-  // LMUL), so software targeting non-default lambda should plan a runtime
-  // fallback path.
+  // suffixes select an explicit Lλ override. Unlike the vtype.lambda field,
+  // the instruction-immediate override is NOT WARL-clamped: a nonzero
+  // immediate requests its exact lambda value and raises an
+  // illegal-instruction exception if that value is unsupported for the
+  // current (VLEN, SEW) configuration. Software that needs to discover the
+  // supported set must probe via the vtype-write path (vsetvl /
+  // __riscv_vsetlambda readback), not via the instruction immediate.
   //
   // `ld` (leading dimension in elements) is held in a GPR. `ld == 0` selects
   // a hardware-defined default stride: `lambda * LMUL` for the order-preserving
