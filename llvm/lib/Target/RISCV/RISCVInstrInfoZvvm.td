@@ -62,24 +62,19 @@ def V8WMMACC_VV : RVInstVMatrixMAC<0b111011, "v8wmmacc.vv">;
 // Pseudo instructions used by ISel.
 //
 // Each pseudo carries an extra GPRNoX0:$vl operand from the intrinsic so the
-// .td pattern can consume it. The PseudoInstExpansion below rewrites the
-// pseudo to the real instruction at MC-lowering time, discarding $vl (the
-// real instruction reads VL implicitly from the vl CSR).
+// .td pattern can consume it. MC lowering rewrites the pseudo to the real
+// instruction, discarding $vl (the real instruction reads VL implicitly from
+// the vl CSR).
 //
 // Matrix multiply-accumulate has two independent register-group axes:
 //   * vd  uses EMUL_C = VLEN / (SEW(C) * lambda^2), independent of LMUL.
 //   * vs1 / vs2 use vtype.LMUL.
-// PseudoVMatrixMACPair is parameterized over both; PseudoVMatrixMAC is the
-// degenerate single-LMUL form kept for the widening MACs that still ride on
-// the EMUL_C = LMUL = 1 representative pattern (deferred follow-up).
+// PseudoVMatrixMACPair is parameterized over both. All eight MAC mnemonics
+// (non-widening and widening, integer and FP) use the same pseudo shape: the
+// pseudo is register-class-typed only, so one 16-cell pseudo grid per
+// mnemonic serves every SEW combination; the per-SEW distinction lives in
+// the ISel patterns.
 //===----------------------------------------------------------------------===//
-
-let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
-    Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in
-class PseudoVMatrixMAC<Instruction realInst>
-    : Pseudo<(outs VR:$vd_wb),
-             (ins VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl), []>,
-      PseudoInstExpansion<(realInst VR:$vd_wb, VR:$vd, VR:$vs1, VR:$vs2)>;
 
 // Marker base class for all Zvvm matrix pseudos that need MC lowering via the
 // dedicated helper (lowerRISCVMatrixPseudo in RISCVAsmPrinter.cpp). The helper
@@ -127,7 +122,9 @@ class PseudoVMatrixMACPair<Instruction realInst,
                   abti.RegClass:$vs2, GPRNoX0:$vl), []>,
       RISCVMatrixPseudo<realInst, /*MAC=*/0>;
 
-// VTI lists for the non-widening MAC (EMUL_C, LMUL) cross-product.
+// VTI lists for the MAC (EMUL_C, LMUL) cross-product. The pseudos only care
+// about the register classes (VR / VRM2 / VRM4 / VRM8), so one grid per
+// mnemonic covers every SEW combination.
 // EMUL_C ∈ {1,2,4,8} (spec also permits 16; capped at 8 because upstream RVV
 // has no VRM16 register class). LMUL ∈ {1,2,4,8}; fractional LMUL is spec-
 // reserved for the IME family.
@@ -135,59 +132,72 @@ defvar AllZvvmMACVTIs_I32 = [VI32M1, VI32M2, VI32M4, VI32M8];
 defvar AllZvvmMACVTIs_F32 = [VF32M1, VF32M2, VF32M4, VF32M8];
 
 let Predicates = [HasStdExtZvvmm] in {
-// Pseudo name: PseudoVMMACC_VV_M{EMUL_C}_M{LMUL} (in that order).
+// Pseudo name: PseudoV{,W,Q,8W}MMACC_VV_M{EMUL_C}_M{LMUL} (in that order).
 foreach cti = AllZvvmMACVTIs_I32 in
-  foreach abti = AllZvvmMACVTIs_I32 in
+  foreach abti = AllZvvmMACVTIs_I32 in {
     def "PseudoVMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
         : PseudoVMatrixMACPair<VMMACC_VV, cti, abti>;
-
-def PseudoVWMMACC_VV  : PseudoVMatrixMAC<VWMMACC_VV>;
-def PseudoVQMMACC_VV  : PseudoVMatrixMAC<VQMMACC_VV>;
-def PseudoV8WMMACC_VV : PseudoVMatrixMAC<V8WMMACC_VV>;
+    def "PseudoVWMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VWMMACC_VV, cti, abti>;
+    def "PseudoVQMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VQMMACC_VV, cti, abti>;
+    def "PseudoV8WMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<V8WMMACC_VV, cti, abti>;
+  }
 } // Predicates = [HasStdExtZvvmm]
 
 //===----------------------------------------------------------------------===//
 // ISel patterns: lower intrinsics to pseudos.
 //
-// Non-widening MAC (vmmacc.vv): EMUL_C ∈ {1,2,4,8} × LMUL ∈ {1,2,4,8} cross
-// product, since EMUL_C and LMUL are independent. The widening MACs still
-// emit one representative pattern per intrinsic at EMUL_C = LMUL = 1; the
-// (SEW(A) ≠ SEW(C), EMUL_C ≠ LMUL) coverage for them is deferred.
+// Every MAC covers the full EMUL_C ∈ {1,2,4,8} × LMUL ∈ {1,2,4,8} cross
+// product, since EMUL_C and LMUL are independent. For the widening MACs an
+// additional axis is the (SEW(C), EEW(A/B)) combination — one pattern set is
+// emitted per combination, all mapping to the same register-class-typed
+// pseudo grid. Cells with 4-bit inputs (Int4 / OFP4) have no scalable IR
+// element type and are deferred to the MX/format follow-up.
+//
+// Shared pattern class: one cell of a MAC's (EMUL_C, LMUL) grid at a fixed
+// (C-type, A/B-type) combination.
 //===----------------------------------------------------------------------===//
 
-let Predicates = [HasStdExtZvvmm] in {
-// W=1: SEW(C) = SEW(A) = SEW(B) = 32. Independent (EMUL_C, LMUL).
-foreach cti = AllZvvmMACVTIs_I32 in
-  foreach abti = AllZvvmMACVTIs_I32 in
-    def : Pat<(cti.Vector (int_riscv_vmmacc (cti.Vector cti.RegClass:$vd),
-                                            (abti.Vector abti.RegClass:$vs1),
-                                            (abti.Vector abti.RegClass:$vs2),
-                                            (XLenVT GPRNoX0:$vl))),
-              (!cast<Instruction>("PseudoVMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX)
-                  cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
-                  GPRNoX0:$vl)>;
+class ZvvmMACPat<Intrinsic intr, string pseudoBase,
+                 VTypeInfo cti, VTypeInfo abti>
+    : Pat<(cti.Vector (intr (cti.Vector cti.RegClass:$vd),
+                            (abti.Vector abti.RegClass:$vs1),
+                            (abti.Vector abti.RegClass:$vs2),
+                            (XLenVT GPRNoX0:$vl))),
+          (!cast<Instruction>("Pseudo"#pseudoBase#"_VV_"#cti.LMul.MX#"_"#abti.LMul.MX)
+              cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
+              GPRNoX0:$vl)>;
 
-// W=2: SEW(C) = 32, EEW(A) = EEW(B) = 16, EMUL_C = LMUL = 1.
-def : Pat<(nxv2i32 (int_riscv_vwmmacc (nxv2i32 VR:$vd),
-                                      (nxv4i16 VR:$vs1),
-                                      (nxv4i16 VR:$vs2),
-                                      (XLenVT GPRNoX0:$vl))),
-          (PseudoVWMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
+// Integer MACs. Rows: [pseudo base, C-type prefix, A/B-type prefix].
+//   vmmacc   (W=1): SEW(C) = EEW(A/B) ∈ {32}          (8/16/64 C-side SEW
+//                   coverage tracks the Clang surface; i32 today)
+//   vwmmacc  (W=2): (i16, i8), (i32, i16), (i64, i32)
+//   vqmmacc  (W=4): (i32, i8), (i64, i16)   — (i16, i4) deferred (no i4 IR)
+//   v8wmmacc (W=8): (i64, i8)               — (i32, i4) deferred (no i4 IR)
+defvar ZvvmIntMACRows = [
+  ["VMMACC",   "I32", "I32"],
+  ["VWMMACC",  "I16", "I8"],
+  ["VWMMACC",  "I32", "I16"],
+  ["VWMMACC",  "I64", "I32"],
+  ["VQMMACC",  "I32", "I8"],
+  ["VQMMACC",  "I64", "I16"],
+  ["V8WMMACC", "I64", "I8"],
+];
 
-// W=4: SEW(C) = 32, EEW(A) = EEW(B) = 8, EMUL_C = LMUL = 1.
-def : Pat<(nxv2i32 (int_riscv_vqmmacc (nxv2i32 VR:$vd),
-                                      (nxv8i8 VR:$vs1),
-                                      (nxv8i8 VR:$vs2),
-                                      (XLenVT GPRNoX0:$vl))),
-          (PseudoVQMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
-
-// W=8: SEW(C) = 64, EEW(A) = EEW(B) = 8, EMUL_C = LMUL = 1.
-def : Pat<(nxv1i64 (int_riscv_v8wmmacc (nxv1i64 VR:$vd),
-                                       (nxv8i8 VR:$vs1),
-                                       (nxv8i8 VR:$vs2),
-                                       (XLenVT GPRNoX0:$vl))),
-          (PseudoV8WMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
-} // Predicates = [HasStdExtZvvmm]
+foreach row = ZvvmIntMACRows in {
+  foreach cMX = ["M1", "M2", "M4", "M8"] in {
+    foreach abMX = ["M1", "M2", "M4", "M8"] in {
+      defvar cti  = !cast<VTypeInfo>("V" # row[1] # cMX);
+      defvar abti = !cast<VTypeInfo>("V" # row[2] # abMX);
+      let Predicates = !listconcat([HasStdExtZvvmm],
+                                   GetVTypeMinimalPredicates<cti>.Predicates) in
+      def : ZvvmMACPat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0])),
+                       row[0], cti, abti>;
+    }
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // Zvvfmm: floating-point matrix multiply-accumulate.
@@ -209,64 +219,60 @@ def VF8WMMACC_VV : RVInstVFMatrixMAC<0b010111, "vf8wmmacc.vv">;
 } // Predicates = [HasStdExtZvvfmm]
 
 let Predicates = [HasStdExtZvvfmm] in {
-// Pseudo name: PseudoVFMMACC_VV_M{EMUL_C}_M{LMUL} (in that order).
+// Pseudo name: PseudoVF{,W,Q,8W}MMACC_VV_M{EMUL_C}_M{LMUL} (in that order).
 foreach cti = AllZvvmMACVTIs_F32 in
-  foreach abti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in {
     def "PseudoVFMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
         : PseudoVMatrixMACPair<VFMMACC_VV, cti, abti>;
-
-def PseudoVFWMMACC_VV  : PseudoVMatrixMAC<VFWMMACC_VV>;
-def PseudoVFQMMACC_VV  : PseudoVMatrixMAC<VFQMMACC_VV>;
-def PseudoVF8WMMACC_VV : PseudoVMatrixMAC<VF8WMMACC_VV>;
+    def "PseudoVFWMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VFWMMACC_VV, cti, abti>;
+    def "PseudoVFQMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VFQMMACC_VV, cti, abti>;
+    def "PseudoVF8WMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPair<VF8WMMACC_VV, cti, abti>;
+  }
 } // Predicates = [HasStdExtZvvfmm]
 
-// ISel patterns for the FP MACs. The non-widening vfmmacc.vv covers the
-// independent (EMUL_C, LMUL) ∈ {1,2,4,8}^2 grid; the widening variants still
-// emit one representative pattern per intrinsic at EMUL_C = LMUL = 1, since
-// they additionally need varying SEW(A) ≠ SEW(C) coverage that ships in a
-// follow-up alongside the integer-widening builtins.
+// ISel patterns for the FP MACs: full (EMUL_C, LMUL) ∈ {1,2,4,8}^2 grid per
+// (SEW(C), EEW(A/B)) combination.
 //
-// Type choices below mirror the integer side's container convention: when the
-// IR has no first-class FP type for an element width (OFP8 / E4M3 / E5M2), we
-// use the integer container (nxv8i8) and rely on vtype.altfmt to select the
-// FP8 interpretation at execution time.
-let Predicates = [HasStdExtZvvfmm] in {
-// W=1: SEW(C) = SEW(A) = SEW(B) = 32. Independent (EMUL_C, LMUL).
-foreach cti = AllZvvmMACVTIs_F32 in
-  foreach abti = AllZvvmMACVTIs_F32 in
-    def : Pat<(cti.Vector (int_riscv_vfmmacc (cti.Vector cti.RegClass:$vd),
-                                             (abti.Vector abti.RegClass:$vs1),
-                                             (abti.Vector abti.RegClass:$vs2),
-                                             (XLenVT GPRNoX0:$vl))),
-              (!cast<Instruction>("PseudoVFMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX)
-                  cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
-                  GPRNoX0:$vl)>;
+// Type choices mirror the integer side's container convention: when the IR
+// has no first-class FP type for an element width (OFP8 / E4M3 / E5M2), we
+// use the integer container (I8) and rely on vtype.altfmt_A/altfmt_B to
+// select the FP8 interpretation at execution time. BF16 inputs
+// (altfmt_A/B = 1 at 16-bit EEW) reuse the F16 IR container; format
+// disambiguation happens at vsetvl-time, so no additional patterns are
+// required. OFP4 inputs are deferred (no 4-bit IR element type).
+//
+// Rows: [pseudo base, C-type prefix, A/B-type prefix].
+//   vfmmacc   (W=1): (f32, f32)               (other C-side SEWs track the
+//                    Clang surface; f32 today)
+//   vfwmmacc  (W=2): (f16, i8=OFP8), (f32, f16), (f64, f32)
+//   vfqmmacc  (W=4): (f32, i8=OFP8), (f64, f16)
+//   vf8wmmacc (W=8): (f64, i8=OFP8)
+defvar ZvvmFPMACRows = [
+  ["VFMMACC",   "F32", "F32"],
+  ["VFWMMACC",  "F16", "I8"],
+  ["VFWMMACC",  "F32", "F16"],
+  ["VFWMMACC",  "F64", "F32"],
+  ["VFQMMACC",  "F32", "I8"],
+  ["VFQMMACC",  "F64", "F16"],
+  ["VF8WMMACC", "F64", "I8"],
+];
 
-// W=2: SEW(C) = 32, EEW(A) = EEW(B) = 16, FP16 inputs to FP32 accumulator.
-// BF16 input (altfmt_A/B = 1) reuses the same IR type at LMUL=1; format
-// disambiguation happens at vsetvl-time, so no additional ISel pattern is
-// required.
-def : Pat<(nxv2f32 (int_riscv_vfwmmacc (nxv2f32 VR:$vd),
-                                       (nxv4f16 VR:$vs1),
-                                       (nxv4f16 VR:$vs2),
-                                       (XLenVT GPRNoX0:$vl))),
-          (PseudoVFWMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
-
-// W=4: SEW(C) = 32, EEW(A) = EEW(B) = 8, OFP8 inputs to FP32 accumulator.
-// OFP8 has no first-class IR FP type — use the integer container (nxv8i8).
-def : Pat<(nxv2f32 (int_riscv_vfqmmacc (nxv2f32 VR:$vd),
-                                       (nxv8i8 VR:$vs1),
-                                       (nxv8i8 VR:$vs2),
-                                       (XLenVT GPRNoX0:$vl))),
-          (PseudoVFQMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
-
-// W=8: SEW(C) = 64, EEW(A) = EEW(B) = 8, OFP8 inputs to FP64 accumulator.
-def : Pat<(nxv1f64 (int_riscv_vf8wmmacc (nxv1f64 VR:$vd),
-                                        (nxv8i8 VR:$vs1),
-                                        (nxv8i8 VR:$vs2),
-                                        (XLenVT GPRNoX0:$vl))),
-          (PseudoVF8WMMACC_VV VR:$vd, VR:$vs1, VR:$vs2, GPRNoX0:$vl)>;
-} // Predicates = [HasStdExtZvvfmm]
+foreach row = ZvvmFPMACRows in {
+  foreach cMX = ["M1", "M2", "M4", "M8"] in {
+    foreach abMX = ["M1", "M2", "M4", "M8"] in {
+      defvar cti  = !cast<VTypeInfo>("V" # row[1] # cMX);
+      defvar abti = !cast<VTypeInfo>("V" # row[2] # abMX);
+      let Predicates = !listconcat([HasStdExtZvvfmm],
+                                   GetVTypeMinimalPredicates<cti>.Predicates,
+                                   GetVTypeMinimalPredicates<abti>.Predicates) in
+      def : ZvvmMACPat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0])),
+                       row[0], cti, abti>;
+    }
+  }
+}
 
 //===----------------------------------------------------------------------===//
 // Pseudo for the register-form `vsetvl` with a full XLen vtype immediate.
