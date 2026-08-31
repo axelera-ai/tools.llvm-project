@@ -331,3 +331,111 @@ define <vscale x 4 x double> @test_vf8wmmacc_m4_lm4(<vscale x 4 x double> %c,
     iXLen %vl)
   ret <vscale x 4 x double> %r
 }
+
+; --- Non-widening FP MAC SEW coverage beyond f32 (Phase 5) ---
+
+declare <vscale x 4 x half> @llvm.riscv.vfmmacc.nxv4f16.nxv4f16(
+  <vscale x 4 x half>, <vscale x 4 x half>, <vscale x 4 x half>, iXLen)
+declare <vscale x 32 x half> @llvm.riscv.vfmmacc.nxv32f16.nxv8f16(
+  <vscale x 32 x half>, <vscale x 8 x half>, <vscale x 8 x half>, iXLen)
+declare <vscale x 2 x double> @llvm.riscv.vfmmacc.nxv2f64.nxv4f64(
+  <vscale x 2 x double>, <vscale x 4 x double>, <vscale x 4 x double>, iXLen)
+declare <vscale x 8 x double> @llvm.riscv.vfmmacc.nxv8f64.nxv1f64(
+  <vscale x 8 x double>, <vscale x 1 x double>, <vscale x 1 x double>, iXLen)
+declare <vscale x 8 x i8> @llvm.riscv.vfmmacc.nxv8i8.nxv8i8(
+  <vscale x 8 x i8>, <vscale x 8 x i8>, <vscale x 8 x i8>, iXLen)
+declare <vscale x 32 x i8> @llvm.riscv.vfmmacc.nxv32i8.nxv16i8(
+  <vscale x 32 x i8>, <vscale x 16 x i8>, <vscale x 16 x i8>, iXLen)
+
+define <vscale x 4 x half> @test_vfmmacc_f16_m1_lm1(<vscale x 4 x half> %c,
+                                                    <vscale x 4 x half> %a,
+                                                    <vscale x 4 x half> %b,
+                                                    iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_f16_m1_lm1:
+; CHECK:       vfmmacc.vv v8, v9, v10
+; CHECK:       ret
+  %r = call <vscale x 4 x half> @llvm.riscv.vfmmacc.nxv4f16.nxv4f16(
+    <vscale x 4 x half> %c,
+    <vscale x 4 x half> %a,
+    <vscale x 4 x half> %b,
+    iXLen %vl)
+  ret <vscale x 4 x half> %r
+}
+
+define <vscale x 32 x half> @test_vfmmacc_f16_m8_lm2(<vscale x 32 x half> %c,
+                                                     <vscale x 8 x half> %a,
+                                                     <vscale x 8 x half> %b,
+                                                     iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_f16_m8_lm2:
+; CHECK:       vfmmacc.vv v8, v16, v18
+; CHECK:       ret
+  %r = call <vscale x 32 x half> @llvm.riscv.vfmmacc.nxv32f16.nxv8f16(
+    <vscale x 32 x half> %c,
+    <vscale x 8 x half> %a,
+    <vscale x 8 x half> %b,
+    iXLen %vl)
+  ret <vscale x 32 x half> %r
+}
+
+define <vscale x 2 x double> @test_vfmmacc_f64_m2_lm4(<vscale x 2 x double> %c,
+                                                      <vscale x 4 x double> %a,
+                                                      <vscale x 4 x double> %b,
+                                                      iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_f64_m2_lm4:
+; CHECK:       vfmmacc.vv v8, v12, v16
+; CHECK:       ret
+  %r = call <vscale x 2 x double> @llvm.riscv.vfmmacc.nxv2f64.nxv4f64(
+    <vscale x 2 x double> %c,
+    <vscale x 4 x double> %a,
+    <vscale x 4 x double> %b,
+    iXLen %vl)
+  ret <vscale x 2 x double> %r
+}
+
+define <vscale x 8 x double> @test_vfmmacc_f64_m8_lm1(<vscale x 8 x double> %c,
+                                                      <vscale x 1 x double> %a,
+                                                      <vscale x 1 x double> %b,
+                                                      iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_f64_m8_lm1:
+; CHECK:       vfmmacc.vv v8, v16, v17
+; CHECK:       ret
+  %r = call <vscale x 8 x double> @llvm.riscv.vfmmacc.nxv8f64.nxv1f64(
+    <vscale x 8 x double> %c,
+    <vscale x 1 x double> %a,
+    <vscale x 1 x double> %b,
+    iXLen %vl)
+  ret <vscale x 8 x double> %r
+}
+
+; SEW=8 accumulator row: OFP8 C tile with OFP8 inputs (Zvvofp8mm). No IR FP8
+; element type exists, so both sides use the i8 container; vtype.altfmt and
+; altfmt_A/altfmt_B select the E4M3/E5M2 interpretation at execution time.
+define <vscale x 8 x i8> @test_vfmmacc_ofp8_m1_lm1(<vscale x 8 x i8> %c,
+                                                   <vscale x 8 x i8> %a,
+                                                   <vscale x 8 x i8> %b,
+                                                   iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_ofp8_m1_lm1:
+; CHECK:       vfmmacc.vv v8, v9, v10
+; CHECK:       ret
+  %r = call <vscale x 8 x i8> @llvm.riscv.vfmmacc.nxv8i8.nxv8i8(
+    <vscale x 8 x i8> %c,
+    <vscale x 8 x i8> %a,
+    <vscale x 8 x i8> %b,
+    iXLen %vl)
+  ret <vscale x 8 x i8> %r
+}
+
+define <vscale x 32 x i8> @test_vfmmacc_ofp8_m4_lm2(<vscale x 32 x i8> %c,
+                                                    <vscale x 16 x i8> %a,
+                                                    <vscale x 16 x i8> %b,
+                                                    iXLen %vl) nounwind {
+; CHECK-LABEL: test_vfmmacc_ofp8_m4_lm2:
+; CHECK:       vfmmacc.vv v8, v12, v14
+; CHECK:       ret
+  %r = call <vscale x 32 x i8> @llvm.riscv.vfmmacc.nxv32i8.nxv16i8(
+    <vscale x 32 x i8> %c,
+    <vscale x 16 x i8> %a,
+    <vscale x 16 x i8> %b,
+    iXLen %vl)
+  ret <vscale x 32 x i8> %r
+}
