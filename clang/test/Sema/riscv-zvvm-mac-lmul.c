@@ -1,6 +1,8 @@
 // REQUIRES: riscv-registered-target
-// RUN: %clang_cc1 -triple riscv64 -target-feature +v -target-feature +experimental-zvvmm \
-// RUN:   -target-feature +experimental-zvvfmm -fsyntax-only -verify %s
+// RUN: %clang_cc1 -triple riscv64 -target-feature +v \
+// RUN:   -target-feature +experimental-zvvi8mm -target-feature +experimental-zvvi16mm -target-feature +experimental-zvvi32mm -target-feature +experimental-zvvi64mm -target-feature +experimental-zvvi8i16mm -target-feature +experimental-zvvi16i32mm -target-feature +experimental-zvvi32i64mm -target-feature +experimental-zvvi8i32mm -target-feature +experimental-zvvi16i64mm -target-feature +experimental-zvvi8i64mm \
+// RUN:   -target-feature +experimental-zvvfp16mm -target-feature +experimental-zvvfp32mm -target-feature +experimental-zvvfp64mm -target-feature +experimental-zvvfp16fp32mm -target-feature +experimental-zvvfp32fp64mm -target-feature +experimental-zvvfp16fp64mm \
+// RUN:   -fsyntax-only -verify %s
 
 // Verify the (EMUL_C, LMUL) MAC C-surface: distinct builtins per cell, with
 // per-operand types pinned to the LMUL suffix in the name. Wrong-LMUL inputs

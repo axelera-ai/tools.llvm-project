@@ -41,7 +41,7 @@ bin/clang -cc1 -triple riscv64 \
   -target-feature +c -target-feature +v \
   -target-feature +experimental-zvvmm \
   -target-feature +experimental-zvvmtls \
-  -target-feature +experimental-zvvfmm \
+  -target-feature +experimental-zvvfp32mm \
   -target-feature +zvl128b \
   -O2 -emit-obj -nostdsysteminc \
   -internal-isystem lib/clang/22/include \
@@ -52,7 +52,7 @@ bin/clang -cc1as -triple riscv64 \
   -target-feature +c -target-feature +v \
   -target-feature +experimental-zvvmm \
   -target-feature +experimental-zvvmtls \
-  -target-feature +experimental-zvvfmm \
+  -target-feature +experimental-zvvfp32mm \
   -target-feature +zvl128b \
   -filetype obj $EXAMPLE/zvvm_start.S -o zvvm_fp_start.o
 
@@ -67,7 +67,7 @@ so no Zvvm-aware toolchain is needed at simulation time.
 ## Run on a Zvvm-patched spike
 
 ```sh
-spike --isa=rv64gcv_zvvmm_zvvmtls_zvvfmm zvvm_fp_gemm.elf
+spike --isa=rv64gcv_zvvmm_zvvmtls_zvvfmm_zvvfp32mm zvvm_fp_gemm.elf
 echo $?     # expect 7
 ```
 

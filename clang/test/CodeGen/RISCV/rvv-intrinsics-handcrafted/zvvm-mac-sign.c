@@ -1,6 +1,6 @@
 // NOTE: Assertions were written by hand following the zvvm-vmmacc.c style.
 // REQUIRES: riscv-registered-target
-// RUN: %clang_cc1 -triple riscv64 -target-feature +v -target-feature +experimental-zvvmm \
+// RUN: %clang_cc1 -triple riscv64 -target-feature +v -target-feature +experimental-zvvmm -target-feature +experimental-zvvi8mm -target-feature +experimental-zvvi16mm -target-feature +experimental-zvvi32mm -target-feature +experimental-zvvi64mm -target-feature +experimental-zvvi8i16mm -target-feature +experimental-zvvi16i32mm -target-feature +experimental-zvvi32i64mm -target-feature +experimental-zvvi8i32mm -target-feature +experimental-zvvi16i64mm -target-feature +experimental-zvvi8i64mm \
 // RUN:   -O2 -emit-llvm %s -o - | FileCheck %s
 
 #pragma clang riscv intrinsic zvvm_vector

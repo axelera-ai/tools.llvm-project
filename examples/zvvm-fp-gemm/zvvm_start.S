@@ -1,5 +1,5 @@
 // Bare-metal entry for spike (HTIF / tohost exit convention).
-// spike --isa=rv64gcv_zvvmm_zvvmtls zvvm_gemm.elf
+// spike --isa=rv64gcv_zvvmm_zvvmtls_zvvfmm_zvvfp32mm zvvm_gemm.elf
 //
 // Spike with HTIF polls the ELF symbol `tohost`. Writing a nonzero value
 // terminates the simulation; bit 0 must be 1, the exit code is bits[16:1].

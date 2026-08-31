@@ -1,6 +1,6 @@
 // REQUIRES: riscv-registered-target
 // RUN: %clang_cc1 -triple riscv64 -target-feature +v \
-// RUN:   -target-feature +experimental-zvvmm \
+// RUN:   -target-feature +experimental-zvvmm -target-feature +experimental-zvvi32mm \
 // RUN:   -target-feature +experimental-zvvmtls \
 // RUN:   -O2 -emit-llvm %s -o - | FileCheck %s
 //
