@@ -583,6 +583,93 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 }
 
 //===----------------------------------------------------------------------===//
+// Integer-input microscaled MACs: vfwimmacc.vv / vfqimmacc.vv /
+// vf8wimmacc.vv (MXINT8 inputs, FP accumulator; MX-only instructions —
+// their vm=1 encodings are vwmmacc/vqmmacc/v8wmmacc).
+//
+// Naming per the spec's spelled prototypes
+// (e.g. `vfloat64m4_t __riscv_vf8wimmacc_vv_f64m4_i8m1_bs32(...)`):
+//
+//   __riscv_vf{w,q,8w}immacc_vv_{f16,f32,f64}m{c}_i8m{ab}_bs{32,16}
+//
+// The `_i8m{ab}` input-type token is present because an integer input type
+// is not derivable from the FP accumulator type; the token carries the A/B
+// LMUL itself, so no separate `_lm{N}` qualifier appears (the canonical
+// suffix grammar's `_lm{N}` slot is used only by names without an
+// input-type token). The `_i8m1` spelling is kept for LMUL=1 — the
+// `_lm1`-omission rule applies to the `_lm{N}` qualifier, not to type
+// tokens. `_bs{N}` is last per the canonical microscaled suffix order.
+//
+// Signature (f16m1/i8m1/bs32 shown):
+//   vfloat16m1_t __riscv_vfwimmacc_vv_f16m1_i8m1_bs32(
+//       vfloat16m1_t vd, vint8m1_t vs1, vint8m1_t vs2,
+//       vuint16m1_t v0, size_t vl);
+//
+// MXINT inputs are always signed — no unsigned variants exist. The paired
+// E8M0 block-scale argument is always vuint16m1_t (one register of 16-bit
+// pairs), spelled with the dedicated `(ScalePair:16)Uv` transformer since it
+// changes SEW, LMUL, and scalar kind at once. The `_bs{N}` suffix and the
+// bs immarg it lowers to are a SEMANTIC RECORD of the block size the code
+// was written against: the architectural block size is vtype.bs, which the
+// caller must program via __riscv_vsetvl_matrix — exactly as the `_su`/`_us`
+// sign variants record what vtype.altfmt_A/altfmt_B must be. BS=32 cells
+// are gated on the Zvvxi8* extensions, BS=16 cells on Zvvxni8* (which imply
+// their BS=32 siblings).
+//
+// The FP-input microscaled forms (vfwmmacc/vfqmmacc/vf8wmmacc with
+// v0.scale) have IR intrinsics and ISel but no C surface yet: every FP MX
+// row has OFP4/OFP8 inputs, which still lack Clang vector types. m16
+// accumulator cells are likewise deferred (the m16 tuple vd and the
+// FixedSEW inputs cannot yet be spelled in one prototype).
+//===----------------------------------------------------------------------===//
+
+// Rows: [IR name, TypeRange char (C type), C-type token, input EEW,
+//        BS=32 feature, BS=16 feature].
+defvar ZvvmIntMXMACRows = [
+  ["vfwimmacc",  "x", "f16", "8", "experimental-zvvxi8fp16mm",
+                                  "experimental-zvvxni8fp16mm"],
+  ["vfqimmacc",  "f", "f32", "8", "experimental-zvvxi8fp32mm",
+                                  "experimental-zvvxni8fp32mm"],
+  ["vf8wimmacc", "d", "f64", "8", "experimental-zvvxi8fp64mm",
+                                  "experimental-zvvxni8fp64mm"],
+];
+
+foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
+  foreach abLog2 = [0, 1, 2, 3] in {  // LMUL   ∈ {1,2,4,8}
+    defvar cdTfm  = ABLog2LMULTransformer<abLog2, cLog2>.Str;
+    defvar emul_c = !shl(1, cLog2);
+    defvar lmul   = !shl(1, abLog2);
+
+    foreach row = ZvvmIntMXMACRows in {
+      defvar abTfm = "(FixedSEW:" # row[3] # ")I";
+      foreach bs = [["_bs32", "0"], ["_bs16", "1"]] in {
+        defvar mxName = row[0] # "_vv_" # row[2] # "m" # emul_c
+                        # "_i" # row[3] # "m" # lmul # bs[0];
+        let RequiredFeatures = [!if(!eq(bs[1], "0"), row[4], row[5])],
+            HasMasked = false,
+            UnMaskedPolicyScheme = NonePolicy,
+            Log2LMUL = [abLog2],
+            ManualCodegen = [{
+              // Ops = (vd, vs1, vs2, scale, vl). Insert the bs immarg
+              // (semantic record; vtype.bs carries the architectural state)
+              // before vl.
+              Ops.insert(Ops.end() - 1,
+                         llvm::ConstantInt::get(Ops.back()->getType(), }]
+                       # bs[1] # [{));
+              IntrinsicTypes = {ResultType, Ops[1]->getType(),
+                                Ops.back()->getType()};
+            }],
+            Name = mxName,
+            OverloadedName = mxName,
+            IRName = row[0] in
+          def : RVVBuiltin<"", cdTfm # "v" # cdTfm # "v" # abTfm # "v"
+                               # abTfm # "v" # "(ScalePair:16)Uv", row[1]>;
+      }
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Zvvmtls / Zvvmttls: tile load and store.
 //
 // Four mnemonics, each over TypeRange "csilxfd" at LMUL ∈ {1,2,4,8}:
