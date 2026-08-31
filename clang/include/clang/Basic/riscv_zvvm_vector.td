@@ -353,6 +353,147 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 }
 
 //===----------------------------------------------------------------------===//
+// EMUL_C = 16 column of the non-widening MAC grid.
+//
+// The m16 accumulator is the IME-only v<elt>m16_t type — a
+// 16-register-aligned pair of M8 groups, represented as the vector tuple
+// target("riscv.vector.tuple", <vscale x 64 x i8>, 2). Each def is based at
+// Log2LMUL = 3 (M8) so vd/ret is simply `(Tuple:2)v` (a pair of the base M8
+// type = m16); vs1/vs2 pin the A/B LMUL with the usual
+// `(S/SE FixedLog2LMUL:N)` transformer. The IR intrinsics are the dedicated
+// `*_m16` family: at the IR level the tuple accumulator is byte-typed (the C
+// SEW lives in vtype), so the (intrinsic, A/B type) pair identifies the row.
+//
+// The widening MACs' m16 cells are NOT exposed in C yet: their inputs need
+// FixedSEW *and* FixedLog2LMUL on one operand, and the prototype language
+// allows a single vector-type transformer per operand. Backend ISel for them
+// exists; the C surface needs a combined transformer first (deferred).
+//===----------------------------------------------------------------------===//
+
+foreach abLog2 = [0, 1, 2, 3] in {    // LMUL ∈ {1,2,4,8}; EMUL_C fixed at 16
+  defvar m16abTfm = ABLog2LMULTransformer<3, abLog2>.Str;
+  defvar m16lmul = !shl(1, abLog2);
+  defvar m16lmSuffix = !if(!eq(abLog2, 0), "", "_lm" # m16lmul);
+
+  foreach sew = ZvvmNonWideningIntMACSEWs in {
+    foreach sc = ZvvmIntMACSignCombos in {
+      defvar intName = "vmmacc_vv_" # sc[0] # sew[1] # "m16"
+                       # sc[1] # m16lmSuffix;
+      let RequiredFeatures = [sew[2]],
+          HasMasked = false,
+          UnMaskedPolicyScheme = NonePolicy,
+          Log2LMUL = [3],
+          IntrinsicTypes = [-1, 1],
+          Name = intName,
+          OverloadedName = intName,
+          IRName = "vmmacc_m16" in
+        def : RVVBuiltin<"", "(Tuple:2)" # sc[2] # "(Tuple:2)" # sc[2]
+                             # m16abTfm # sc[3] # m16abTfm # sc[4], sew[0]>;
+    }
+  }
+
+  foreach fpRow = ZvvmNonWideningFPMACRows in {
+    defvar fpName = "vfmmacc_vv_" # fpRow[1] # "m16" # m16lmSuffix;
+    let RequiredFeatures = [fpRow[2]],
+        HasMasked = false,
+        UnMaskedPolicyScheme = NonePolicy,
+        Log2LMUL = [3],
+        IntrinsicTypes = [-1, 1],
+        Name = fpName,
+        OverloadedName = fpName,
+        IRName = "vfmmacc_m16" in
+      def : RVVBuiltin<"", "(Tuple:2)v(Tuple:2)v" # m16abTfm # "v"
+                           # m16abTfm # "v", fpRow[0]>;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// IME m16 pair/unpair pseudo-intrinsics (spec §"Pairing and unpairing m16
+// accumulator values").
+//
+//   v<elt>m16_t __riscv_ime_vpair_<elt>m16   (v<elt>m8_t lo, v<elt>m8_t hi);
+//   v<elt>m8_t  __riscv_ime_vunpairlo_<elt>m16(v<elt>m16_t src);
+//   v<elt>m8_t  __riscv_ime_vunpairhi_<elt>m16(v<elt>m16_t src);
+//
+// Pure value composition/extraction — no new ISA instruction and no vl
+// argument. They lower to llvm.riscv.tuple.insert/extract, whose backend
+// coalescing gives zero-move lowering when allocation permits (the spec's
+// compiler-modeling table). Bitwise semantics: every element bit, including
+// NaN payloads, is preserved. The low half (index 0) is the first eight
+// architectural registers of the group; the high half (index 1) the last
+// eight.
+//===----------------------------------------------------------------------===//
+
+// Fields: [TypeRange char, elt token, vector char, gating extension].
+// bf16 has an m16 type (the accumulator type set is uniform) but no MAC
+// C surface yet; its pair/unpair still exists per spec.
+defvar ZvvmM16PairElts = [
+  ["c", "i8",   "v",  "experimental-zvvmm"],
+  ["s", "i16",  "v",  "experimental-zvvmm"],
+  ["i", "i32",  "v",  "experimental-zvvmm"],
+  ["l", "i64",  "v",  "experimental-zvvmm"],
+  ["c", "u8",   "Uv", "experimental-zvvmm"],
+  ["s", "u16",  "Uv", "experimental-zvvmm"],
+  ["i", "u32",  "Uv", "experimental-zvvmm"],
+  ["l", "u64",  "Uv", "experimental-zvvmm"],
+  ["x", "f16",  "v",  "experimental-zvvfmm"],
+  ["f", "f32",  "v",  "experimental-zvvfmm"],
+  ["d", "f64",  "v",  "experimental-zvvfmm"],
+  ["y", "bf16", "v",  "experimental-zvvfmm"],
+];
+
+foreach elt = ZvvmM16PairElts in {
+  defvar pairName     = "ime_vpair_"     # elt[1] # "m16";
+  defvar unpairloName = "ime_vunpairlo_" # elt[1] # "m16";
+  defvar unpairhiName = "ime_vunpairhi_" # elt[1] # "m16";
+
+  let RequiredFeatures = [elt[3]],
+      HasMasked = false,
+      HasVL = false,
+      UnMaskedPolicyScheme = NonePolicy,
+      Log2LMUL = [3] in {
+    let Name = pairName, OverloadedName = pairName, IRName = "tuple_insert",
+        ManualCodegen = [{
+          {
+            // (lo, hi) -> m16 tuple: two inserts on poison.
+            llvm::Function *TInsert = CGM.getIntrinsic(
+                Intrinsic::riscv_tuple_insert,
+                {ResultType, Ops[0]->getType()});
+            llvm::Value *V = llvm::PoisonValue::get(ResultType);
+            V = Builder.CreateCall(TInsert, {V, Ops[0], Builder.getInt32(0)});
+            return Builder.CreateCall(TInsert,
+                                      {V, Ops[1], Builder.getInt32(1)});
+          }
+        }] in
+      def : RVVBuiltin<"", "(Tuple:2)" # elt[2] # elt[2] # elt[2], elt[0]>;
+
+    let Name = unpairloName, OverloadedName = unpairloName,
+        IRName = "tuple_extract",
+        ManualCodegen = [{
+          {
+            llvm::Function *TExtract = CGM.getIntrinsic(
+                Intrinsic::riscv_tuple_extract,
+                {ResultType, Ops[0]->getType()});
+            return Builder.CreateCall(TExtract, {Ops[0], Builder.getInt32(0)});
+          }
+        }] in
+      def : RVVBuiltin<"", elt[2] # "(Tuple:2)" # elt[2], elt[0]>;
+
+    let Name = unpairhiName, OverloadedName = unpairhiName,
+        IRName = "tuple_extract",
+        ManualCodegen = [{
+          {
+            llvm::Function *TExtract = CGM.getIntrinsic(
+                Intrinsic::riscv_tuple_extract,
+                {ResultType, Ops[0]->getType()});
+            return Builder.CreateCall(TExtract, {Ops[0], Builder.getInt32(1)});
+          }
+        }] in
+      def : RVVBuiltin<"", elt[2] # "(Tuple:2)" # elt[2], elt[0]>;
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Zvvmm / Zvvfmm: widening matrix multiply-accumulate (vwmmacc.vv,
 // vqmmacc.vv, v8wmmacc.vv, vfwmmacc.vv, vfqmmacc.vv).
 //
