@@ -122,6 +122,17 @@ class PseudoVMatrixMACPair<Instruction realInst,
                   abti.RegClass:$vs2, GPRNoX0:$vl), []>,
       RISCVMatrixPseudo<realInst, /*MAC=*/0>;
 
+// EMUL_C = 16 variant: vd is the IME m16 accumulator — a 16-register-aligned
+// pair of M8 groups (VRN2M8, IR type riscv_nxv64i8x2). Same operand shape and
+// MC lowering (Kind = MAC); baseVRRegister peels the tuple to its base VR.
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
+    Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in
+class PseudoVMatrixMACPairM16<Instruction realInst, VTypeInfo abti>
+    : Pseudo<(outs VRN2M8:$vd_wb),
+             (ins VRN2M8:$vd, abti.RegClass:$vs1,
+                  abti.RegClass:$vs2, GPRNoX0:$vl), []>,
+      RISCVMatrixPseudo<realInst, /*MAC=*/0>;
+
 // VTI lists for the MAC (EMUL_C, LMUL) cross-product. The pseudos only care
 // about the register classes (VR / VRM2 / VRM4 / VRM8), so one grid per
 // mnemonic covers every SEW combination.
@@ -144,6 +155,20 @@ foreach cti = AllZvvmMACVTIs_I32 in
     def "PseudoV8WMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
         : PseudoVMatrixMACPair<V8WMMACC_VV, cti, abti>;
   }
+
+// EMUL_C = 16 column: one M16 pseudo per (mnemonic, LMUL); the VRN2M8 vd
+// class is SEW-agnostic, so — as with the M1..M8 grid — one pseudo serves
+// every SEW combination.
+foreach abti = AllZvvmMACVTIs_I32 in {
+  def "PseudoVMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VMMACC_VV, abti>;
+  def "PseudoVWMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VWMMACC_VV, abti>;
+  def "PseudoVQMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VQMMACC_VV, abti>;
+  def "PseudoV8WMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<V8WMMACC_VV, abti>;
+}
 } // Predicates = [HasStdExtZvvmm]
 
 //===----------------------------------------------------------------------===//
@@ -168,6 +193,18 @@ class ZvvmMACPat<Intrinsic intr, string pseudoBase,
                             (XLenVT GPRNoX0:$vl))),
           (!cast<Instruction>("Pseudo"#pseudoBase#"_VV_"#cti.LMul.MX#"_"#abti.LMul.MX)
               cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
+              GPRNoX0:$vl)>;
+
+// EMUL_C = 16 cell: the C accumulator is the byte-typed m16 tuple
+// (riscv_nxv64i8x2); the C-side SEW is erased at the IR level (it lives in
+// vtype), so the (intrinsic, A/B type) pair alone identifies the spec row.
+class ZvvmMACM16Pat<Intrinsic intr, string pseudoBase, VTypeInfo abti>
+    : Pat<(riscv_nxv64i8x2 (intr (riscv_nxv64i8x2 VRN2M8:$vd),
+                                 (abti.Vector abti.RegClass:$vs1),
+                                 (abti.Vector abti.RegClass:$vs2),
+                                 (XLenVT GPRNoX0:$vl))),
+          (!cast<Instruction>("Pseudo"#pseudoBase#"_VV_M16_"#abti.LMul.MX)
+              VRN2M8:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
               GPRNoX0:$vl)>;
 
 // Integer MACs. Rows: [pseudo base, C-type prefix, A/B-type prefix,
@@ -205,6 +242,20 @@ foreach row = ZvvmIntMACRows in {
   }
 }
 
+// EMUL_C = 16 column of the integer grid. The C SEW is carried by vtype, not
+// the IR, so only the A/B type distinguishes rows here; the row's per-type
+// extension still gates the pattern.
+foreach row = ZvvmIntMACRows in {
+  foreach abMX = ["M1", "M2", "M4", "M8"] in {
+    defvar abti = !cast<VTypeInfo>("V" # row[2] # abMX);
+    let Predicates = !listconcat(
+            [!cast<Predicate>("HasStdExt" # row[3])],
+            GetVTypeMinimalPredicates<abti>.Predicates) in
+    def : ZvvmMACM16Pat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0]) # "_m16"),
+                        row[0], abti>;
+  }
+}
+
 //===----------------------------------------------------------------------===//
 // Zvvfmm: floating-point matrix multiply-accumulate.
 //
@@ -237,6 +288,18 @@ foreach cti = AllZvvmMACVTIs_F32 in
     def "PseudoVF8WMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
         : PseudoVMatrixMACPair<VF8WMMACC_VV, cti, abti>;
   }
+
+// EMUL_C = 16 column (see the integer grid above).
+foreach abti = AllZvvmMACVTIs_F32 in {
+  def "PseudoVFMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VFMMACC_VV, abti>;
+  def "PseudoVFWMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VFWMMACC_VV, abti>;
+  def "PseudoVFQMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VFQMMACC_VV, abti>;
+  def "PseudoVF8WMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairM16<VF8WMMACC_VV, abti>;
+}
 } // Predicates = [HasStdExtZvvfmm]
 
 // ISel patterns for the FP MACs: full (EMUL_C, LMUL) ∈ {1,2,4,8}^2 grid per
@@ -290,6 +353,24 @@ foreach row = ZvvmFPMACRows in {
       def : ZvvmMACPat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0])),
                        row[0], cti, abti>;
     }
+  }
+}
+
+// EMUL_C = 16 column of the FP grid. Caveat vs. the M1..M8 grid: two FP rows
+// of the same mnemonic may share an A/B IR container while differing only in
+// the (vtype-carried) C SEW — e.g. vfmmacc F16 could be the FP16 row or a
+// half of another. In the current row set every FP mnemonic's rows have
+// distinct A/B containers, so the (intrinsic, A/B type) mapping stays
+// unambiguous; a duplicate-pattern tablegen error will flag any future
+// violation.
+foreach row = ZvvmFPMACRows in {
+  foreach abMX = ["M1", "M2", "M4", "M8"] in {
+    defvar abti = !cast<VTypeInfo>("V" # row[2] # abMX);
+    let Predicates = !listconcat(
+            [!cast<Predicate>("HasStdExt" # row[3])],
+            GetVTypeMinimalPredicates<abti>.Predicates) in
+    def : ZvvmMACM16Pat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0]) # "_m16"),
+                        row[0], abti>;
   }
 }
 

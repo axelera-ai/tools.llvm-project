@@ -153,6 +153,36 @@ let TargetPrefix = "riscv" in {
   def int_riscv_vfqmmacc  : RISCVMatrixMAC; // W = 4
   def int_riscv_vf8wmmacc : RISCVMatrixMAC; // W = 8
 
+  // EMUL_C = 16 (m16 accumulator) matrix multiply-accumulate: same
+  // (C, A, B, vl) -> C shape, but the C accumulator is a 16-register-aligned
+  // pair of M8 groups represented as the RISC-V vector tuple target type
+  // target("riscv.vector.tuple", <vscale x 64 x i8>, 2). The tuple type is
+  // byte-typed and SEW-agnostic — the accumulator SEW comes from vtype; the
+  // A/B vector type still carries the input EEW and LMUL, so each
+  // (intrinsic, A/B type) pair identifies exactly one spec row. The C-level
+  // __riscv_ime_vpair / vunpairlo / vunpairhi pseudo-intrinsics compose and
+  // decompose the tuple purely via llvm.riscv.tuple.insert/extract — no
+  // dedicated IR intrinsics exist for them.
+  class RISCVMatrixMACM16
+      : DefaultAttrsIntrinsic<[llvm_any_ty],
+                              [LLVMMatchType<0>,
+                               llvm_anyvector_ty,
+                               LLVMMatchType<1>,
+                               llvm_anyint_ty],
+                              [IntrNoMem]>,
+        RISCVVIntrinsic {
+    let VLOperand = 3;
+  }
+
+  def int_riscv_vmmacc_m16    : RISCVMatrixMACM16; // W = 1, integer
+  def int_riscv_vwmmacc_m16   : RISCVMatrixMACM16; // W = 2, integer
+  def int_riscv_vqmmacc_m16   : RISCVMatrixMACM16; // W = 4, integer
+  def int_riscv_v8wmmacc_m16  : RISCVMatrixMACM16; // W = 8, integer
+  def int_riscv_vfmmacc_m16   : RISCVMatrixMACM16; // W = 1, FP
+  def int_riscv_vfwmmacc_m16  : RISCVMatrixMACM16; // W = 2, FP
+  def int_riscv_vfqmmacc_m16  : RISCVMatrixMACM16; // W = 4, FP
+  def int_riscv_vf8wmmacc_m16 : RISCVMatrixMACM16; // W = 8, FP
+
   //===--------------------------------------------------------------------===//
   // Tile load/store (Zvvmtls / Zvvmttls).
   //
