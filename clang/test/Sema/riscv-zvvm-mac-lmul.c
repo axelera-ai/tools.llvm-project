@@ -61,3 +61,55 @@ vint32m1_t no_lm1(vint32m1_t vd, vint32m1_t vs1, vint32m1_t vs2, size_t vl) {
   // expected-error@-1 {{call to undeclared function '__riscv_vmmacc_vv_i32m1_lm1'}}
   // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
 }
+
+// ─── Widening MAC cells ─────────────────────────────────────────────────
+
+vint32m2_t w_ok(vint32m2_t vd, vint16m4_t vs1, vint16m4_t vs2, size_t vl) {
+  return __riscv_vwmmacc_vv_i32m2_lm4(vd, vs1, vs2, vl); // ok
+}
+
+vint32m2_t w_bad_input_sew(vint32m2_t vd, vint32m4_t vs1, vint32m4_t vs2,
+                           size_t vl) {
+  // vwmmacc inputs must be SEW(C)/2 = i16; passing i32 inputs must diagnose.
+  return __riscv_vwmmacc_vv_i32m2_lm4(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint32m4_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint32m2_t w_bad_input_lmul(vint32m2_t vd, vint16m1_t vs1, vint16m1_t vs2,
+                            size_t vl) {
+  // The _lm4 cell pins vs1/vs2 to LMUL=4 (= __rvv_int16m4_t); passing m1
+  // must diagnose.
+  return __riscv_vwmmacc_vv_i32m2_lm4(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint16m1_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint32m4_t w_bad_c_emul_c(vint32m2_t vd, vint16m1_t vs1, vint16m1_t vs2,
+                          size_t vl) {
+  // Builtin expects vd at EMUL_C=4 (= __rvv_int32m4_t); passing m2 must
+  // diagnose.
+  return __riscv_vwmmacc_vv_i32m4(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint32m2_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint64m1_t q_ok(vint64m1_t vd, vint16m8_t vs1, vint16m8_t vs2, size_t vl) {
+  return __riscv_vqmmacc_vv_i64m1_lm8(vd, vs1, vs2, vl); // ok
+}
+
+vint32m1_t q_bad_input_sew(vint32m1_t vd, vint16m1_t vs1, vint16m1_t vs2,
+                           size_t vl) {
+  // vqmmacc inputs must be SEW(C)/4 = i8; passing i16 inputs must diagnose.
+  return __riscv_vqmmacc_vv_i32m1(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint16m1_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint64m1_t no_v8w_i32(vint32m1_t vd, vint8m1_t vs1, vint8m1_t vs2, size_t vl) {
+  // v8wmmacc with an i32 accumulator would need Int4 inputs — no 4-bit
+  // element type exists, so no such builtin is declared.
+  return __riscv_v8wmmacc_vv_i32m1(vd, vs1, vs2, vl);
+  // expected-error@-1 {{call to undeclared function '__riscv_v8wmmacc_vv_i32m1'}}
+  // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
+}
