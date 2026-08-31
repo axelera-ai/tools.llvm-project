@@ -113,3 +113,69 @@ vint64m1_t no_v8w_i32(vint32m1_t vd, vint8m1_t vs1, vint8m1_t vs2, size_t vl) {
   // expected-error@-1 {{call to undeclared function '__riscv_v8wmmacc_vv_i32m1'}}
   // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
 }
+
+// --- Sign-combination variants (Phase 5) ---
+
+vuint32m2_t sign_ok_uu(vuint32m2_t vd, vuint32m1_t vs1, vuint32m1_t vs2,
+                       size_t vl) {
+  return __riscv_vmmacc_vv_u32m2(vd, vs1, vs2, vl); // ok
+}
+
+vint32m2_t sign_ok_su_lm2(vint32m2_t vd, vint32m2_t vs1, vuint32m2_t vs2,
+                          size_t vl) {
+  return __riscv_vmmacc_vv_i32m2_su_lm2(vd, vs1, vs2, vl); // ok
+}
+
+vint32m2_t sign_bad_su_vs2(vint32m2_t vd, vint32m1_t vs1, vint32m1_t vs2,
+                           size_t vl) {
+  // _su expects an UNSIGNED vs2; passing vint32m1_t must diagnose.
+  return __riscv_vmmacc_vv_i32m2_su(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint32m1_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint32m2_t sign_bad_us_vs1(vint32m2_t vd, vint32m1_t vs1, vint32m1_t vs2,
+                           size_t vl) {
+  // _us expects an UNSIGNED vs1.
+  return __riscv_vmmacc_vv_i32m2_us(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint32m1_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vuint32m2_t sign_bad_uu_vd(vint32m2_t vd, vuint32m1_t vs1, vuint32m1_t vs2,
+                           size_t vl) {
+  // The u-token accumulator variant expects an unsigned vd.
+  return __riscv_vmmacc_vv_u32m2(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint32m2_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint32m2_t no_uu_su_combo(vuint32m2_t vd, vint32m1_t vs1, vuint32m1_t vs2,
+                          size_t vl) {
+  // No `u{sew}..._su` spelling exists: mixed-sign variants use the signed
+  // accumulator token per the spec.
+  return __riscv_vmmacc_vv_u32m2_su(vd, vs1, vs2, vl);
+  // expected-error@-1 {{call to undeclared function '__riscv_vmmacc_vv_u32m2_su'}}
+  // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
+}
+
+vint32m2_t widening_sign_ok(vint32m2_t vd, vuint16m1_t vs1, vint16m1_t vs2,
+                            size_t vl) {
+  return __riscv_vwmmacc_vv_i32m2_us(vd, vs1, vs2, vl); // ok
+}
+
+vint32m2_t widening_sign_bad_eew(vint32m2_t vd, vint32m1_t vs1,
+                                 vuint32m1_t vs2, size_t vl) {
+  // vwmmacc _su expects SEW/2 inputs (i16/u16), not full-SEW i32/u32.
+  return __riscv_vwmmacc_vv_i32m2_su(vd, vs1, vs2, vl);
+  // expected-error@-1 {{passing 'vint32m1_t'}}
+  // expected-note@-2 {{passing argument to parameter here}}
+}
+
+vint32m1_t no_su_lm1(vint32m1_t vd, vint32m1_t vs1, vuint32m1_t vs2,
+                     size_t vl) {
+  // _lm1 stays nonexistent for the sign variants too.
+  return __riscv_vmmacc_vv_i32m1_su_lm1(vd, vs1, vs2, vl);
+  // expected-error@-1 {{call to undeclared function '__riscv_vmmacc_vv_i32m1_su_lm1'}}
+  // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
+}
