@@ -171,13 +171,15 @@ class ZvvmMACPat<Intrinsic intr, string pseudoBase,
               GPRNoX0:$vl)>;
 
 // Integer MACs. Rows: [pseudo base, C-type prefix, A/B-type prefix].
-//   vmmacc   (W=1): SEW(C) = EEW(A/B) ∈ {32}          (8/16/64 C-side SEW
-//                   coverage tracks the Clang surface; i32 today)
+//   vmmacc   (W=1): SEW(C) = EEW(A/B) ∈ {8, 16, 32, 64}
 //   vwmmacc  (W=2): (i16, i8), (i32, i16), (i64, i32)
 //   vqmmacc  (W=4): (i32, i8), (i64, i16)   — (i16, i4) deferred (no i4 IR)
 //   v8wmmacc (W=8): (i64, i8)               — (i32, i4) deferred (no i4 IR)
 defvar ZvvmIntMACRows = [
+  ["VMMACC",   "I8",  "I8"],
+  ["VMMACC",   "I16", "I16"],
   ["VMMACC",   "I32", "I32"],
+  ["VMMACC",   "I64", "I64"],
   ["VWMMACC",  "I16", "I8"],
   ["VWMMACC",  "I32", "I16"],
   ["VWMMACC",  "I64", "I32"],
@@ -245,13 +247,19 @@ foreach cti = AllZvvmMACVTIs_F32 in
 // required. OFP4 inputs are deferred (no 4-bit IR element type).
 //
 // Rows: [pseudo base, C-type prefix, A/B-type prefix].
-//   vfmmacc   (W=1): (f32, f32)               (other C-side SEWs track the
-//                    Clang surface; f32 today)
+//   vfmmacc   (W=1): (f16, f16), (f32, f32), (f64, f64), and the SEW=8 row
+//                    (i8, i8) — an OFP8 accumulator with OFP8 inputs
+//                    (Zvvofp8mm); OFP8 has no first-class IR FP type, so
+//                    both sides use the I8 container and vtype.altfmt /
+//                    altfmt_A/altfmt_B select the E4M3/E5M2 interpretation.
 //   vfwmmacc  (W=2): (f16, i8=OFP8), (f32, f16), (f64, f32)
 //   vfqmmacc  (W=4): (f32, i8=OFP8), (f64, f16)
 //   vf8wmmacc (W=8): (f64, i8=OFP8)
 defvar ZvvmFPMACRows = [
+  ["VFMMACC",   "I8",  "I8"],
+  ["VFMMACC",   "F16", "F16"],
   ["VFMMACC",   "F32", "F32"],
+  ["VFMMACC",   "F64", "F64"],
   ["VFWMMACC",  "F16", "I8"],
   ["VFWMMACC",  "F32", "F16"],
   ["VFWMMACC",  "F64", "F32"],
