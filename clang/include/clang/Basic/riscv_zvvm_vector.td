@@ -66,21 +66,29 @@ let RequiredFeatures = ["experimental-zvvmm"],
 // Generated C signature:
 //   size_t __riscv_vsetlambda(size_t requested_lambda);
 //
-// `requested_lambda` is an integer constant expression in
-// {0, 1, 2, 4, 8, 16, 32, 64} (validated in SemaRISCV).
+// `requested_lambda` denotes a semantic lambda value in
+// {0, 1, 2, 4, 8, 16, 32, 64}. It may be a runtime value; a compile-time
+// constant outside the domain is diagnosed in SemaRISCV, and an
+// out-of-domain runtime value is undefined behavior per the IME spec.
 //
-//   * 0     -> read-only query (does not modify vtype).
-//   * 1..64 -> writes vtype.lambda = encoding-of(L), preserves all other
-//              vtype fields and vl. Hardware may WARL-clamp; the returned
-//              value reflects the actually-established lambda.
+//   * 0     -> preserve-or-initialize WRITE: hardware retains the current
+//              lambda if it is supported for the current (VLEN, SEW)
+//              configuration, otherwise establishes the largest supported
+//              nonzero lambda (zero only outside the IME-legal domain).
+//              This may change vtype.lambda — it is not a read-only query;
+//              use __riscv_ime_lambda() to inspect without writing.
+//   * 1..64 -> requests vtype.lambda = encoding-of(L), preserving all other
+//              vtype fields and vl. An unsupported request is
+//              WARL-canonicalized (largest supported value <= L, else the
+//              smallest supported value); the returned value reflects the
+//              actually-established lambda.
 //
 // The return value is the established lambda in the same power-of-two form
 // (0 if not configured; otherwise one of 1, 2, 4, 8, 16, 32, 64).
 //
-// Implementation: this lowers to either int_riscv_query_lambda (L == 0) or
-// int_riscv_vsetlambda (L != 0). The IR intrinsics operate on the 3-bit
-// vtype.lambda encoding; the conversion between the user-facing power-of-two
-// value and the encoding happens entirely in IR-gen.
+// Implementation: lowers to int_riscv_vsetlambda on the 3-bit vtype.lambda
+// encoding. The power-of-two <-> encoding conversion is folded at IR-gen
+// time for constants and emitted as cttz/select for runtime requests.
 //===----------------------------------------------------------------------===//
 
 let RequiredFeatures = ["experimental-zvvmm"],
@@ -93,26 +101,33 @@ let RequiredFeatures = ["experimental-zvvmm"],
     IRName = "vsetlambda",
     ManualCodegen = [{
       {
-        // Ops[0] = requested_lambda (compile-time constant; validated by
-        // Sema).
-        auto *LConst = cast<llvm::ConstantInt>(Ops[0]);
-        uint64_t L = LConst->getZExtValue();
-
-        llvm::Value *EncResult;
-        if (L == 0) {
-          // Read-only query: no vtype write.
-          llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_query_lambda,
-                                               {ResultType});
-          EncResult = Builder.CreateCall(F);
+        // Ops[0] = requested_lambda: 0 (preserve-or-initialize) or a power
+        // of two in {1,...,64}. Compile-time constants are validated by
+        // Sema; runtime values outside the domain are UB.
+        llvm::Value *EncArg;
+        if (auto *LConst = dyn_cast<llvm::ConstantInt>(Ops[0])) {
+          uint64_t L = LConst->getZExtValue();
+          // Encoding: 0 stays 0 (preserve-or-initialize request); a power
+          // of two L maps to log2(L) + 1.
+          uint64_t Encoding = (L == 0) ? 0 : llvm::Log2_64(L) + 1;
+          EncArg = llvm::ConstantInt::get(ResultType, Encoding);
         } else {
-          // L is a power of two in {1,2,4,8,16,32,64}; the 3-bit encoding is
-          // ctz(L) + 1.
-          unsigned Encoding = llvm::Log2_64(L) + 1;
-          llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_vsetlambda,
-                                               {ResultType});
-          EncResult = Builder.CreateCall(
-              F, {llvm::ConstantInt::get(ResultType, Encoding)});
+          // Runtime request: enc = (L == 0) ? 0 : cttz(L) + 1.
+          llvm::Value *L = Ops[0];
+          llvm::Value *Zero = llvm::ConstantInt::get(ResultType, 0);
+          llvm::Value *One = llvm::ConstantInt::get(ResultType, 1);
+          llvm::Function *Cttz =
+              CGM.getIntrinsic(llvm::Intrinsic::cttz, {ResultType});
+          llvm::Value *Tz =
+              Builder.CreateCall(Cttz, {L, Builder.getTrue()});
+          llvm::Value *EncNZ = Builder.CreateAdd(Tz, One);
+          llvm::Value *IsZeroReq = Builder.CreateICmpEQ(L, Zero);
+          EncArg = Builder.CreateSelect(IsZeroReq, Zero, EncNZ);
         }
+
+        llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_vsetlambda,
+                                             {ResultType});
+        llvm::Value *EncResult = Builder.CreateCall(F, {EncArg});
 
         // Convert established encoding (0..7) back to the power-of-two form
         // the user expects: enc == 0 ? 0 : 1 << (enc - 1).
@@ -124,7 +139,72 @@ let RequiredFeatures = ["experimental-zvvmm"],
         return Builder.CreateSelect(IsZero, Zero, POT);
       }
     }] in
-  def vsetlambda : RVVBuiltin<"", "zKz", "i">;
+  def vsetlambda : RVVBuiltin<"", "zz", "i">;
+
+//===----------------------------------------------------------------------===//
+// Zvvm: geometry-query intrinsics (spec §"Geometry-query intrinsics").
+//
+// Generated C signatures:
+//   size_t __riscv_ime_vlen(void);    // architectural VLEN in bits
+//   size_t __riscv_ime_lambda(void);  // currently selected lambda (0 if
+//                                     // none is selected)
+//
+// Both are non-instruction intrinsics and take no vl argument.
+// __riscv_ime_lambda() is a pure read of vtype.lambda — it never writes
+// vtype (contrast __riscv_vsetlambda(0), which is a preserve-or-initialize
+// write). __riscv_ime_vlen() reads the vlenb CSR and scales to bits; the
+// compiler may fold it to a constant when VLEN is statically known.
+//===----------------------------------------------------------------------===//
+
+let RequiredFeatures = ["experimental-zvvmm"],
+    SupportOverloading = false,
+    HasVL = false,
+    HasMasked = false,
+    Log2LMUL = [0],
+    Name = "ime_lambda",
+    OverloadedName = "ime_lambda",
+    IRName = "query_lambda",
+    ManualCodegen = [{
+      {
+        llvm::Function *F = CGM.getIntrinsic(Intrinsic::riscv_query_lambda,
+                                             {ResultType});
+        llvm::Value *EncResult = Builder.CreateCall(F);
+        // Convert the encoding (0..7) to the power-of-two form:
+        // enc == 0 ? 0 : 1 << (enc - 1).
+        llvm::Value *Zero = llvm::ConstantInt::get(ResultType, 0);
+        llvm::Value *One = llvm::ConstantInt::get(ResultType, 1);
+        llvm::Value *IsZero = Builder.CreateICmpEQ(EncResult, Zero);
+        llvm::Value *Shift = Builder.CreateSub(EncResult, One);
+        llvm::Value *POT = Builder.CreateShl(One, Shift);
+        return Builder.CreateSelect(IsZero, Zero, POT);
+      }
+    }] in
+  def ime_lambda : RVVBuiltin<"", "z", "i">;
+
+let RequiredFeatures = ["experimental-zvvmm"],
+    SupportOverloading = false,
+    HasVL = false,
+    HasMasked = false,
+    Log2LMUL = [0],
+    Name = "ime_vlen",
+    OverloadedName = "ime_vlen",
+    IRName = "",
+    ManualCodegen = [{
+      {
+        // Read the vlenb CSR (VLEN in bytes) via read_register — the same
+        // mechanism as __riscv_vlenb() — and scale to bits.
+        llvm::LLVMContext &Ctx = CGM.getLLVMContext();
+        llvm::Metadata *OpsMD[] = {llvm::MDString::get(Ctx, "vlenb")};
+        llvm::Value *RegName = llvm::MetadataAsValue::get(
+            Ctx, llvm::MDNode::get(Ctx, OpsMD));
+        llvm::Function *F =
+            CGM.getIntrinsic(llvm::Intrinsic::read_register, {ResultType});
+        llvm::Value *VLenB = Builder.CreateCall(F, RegName);
+        return Builder.CreateShl(VLenB,
+                                 llvm::ConstantInt::get(ResultType, 3));
+      }
+    }] in
+  def ime_vlen : RVVBuiltin<"", "z", "i">;
 
 //===----------------------------------------------------------------------===//
 // Zvvmm / Zvvfmm: non-widening matrix multiply-accumulate (vmmacc.vv,

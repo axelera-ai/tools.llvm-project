@@ -12,7 +12,7 @@
 ; The lambda field lives at vtype[XLEN-2:XLEN-4]: SHIFT = XLEN-4, which is
 ; 28 on RV32 and 60 on RV64.
 
-declare iXLen @llvm.riscv.vsetlambda.iXLen(iXLen immarg)
+declare iXLen @llvm.riscv.vsetlambda.iXLen(iXLen)
 declare iXLen @llvm.riscv.query.lambda.iXLen()
 
 ; -----------------------------------------------------------------------------
@@ -55,6 +55,51 @@ define iXLen @vsetlambda_l64() nounwind {
 ; CHECK:       li {{[a-z0-9]+}}, 7
 ; CHECK:       vsetvl
   %1 = call iXLen @llvm.riscv.vsetlambda.iXLen(iXLen 7)
+  ret iXLen %1
+}
+
+; -----------------------------------------------------------------------------
+; Encoding 0: the spec's preserve-or-initialize request. Still a full RMW
+; vsetvl commit (hardware performs the preserve-or-initialize selection); the
+; new-encoding step materializes 0.
+
+define iXLen @vsetlambda_preserve_or_init() nounwind {
+; CHECK-LABEL: vsetlambda_preserve_or_init:
+; CHECK:       csrr {{[a-z0-9]+}}, vtype
+; CHECK:       li {{[a-z0-9]+}}, 0
+; CHECK:       vsetvl
+; CHECK:       csrr a0, vtype
+; RV32:        srli a0, a0, 28
+; RV64:        srli a0, a0, 60
+; CHECK:       andi a0, a0, 7
+  %1 = call iXLen @llvm.riscv.vsetlambda.iXLen(iXLen 0)
+  ret iXLen %1
+}
+
+; -----------------------------------------------------------------------------
+; Runtime encoding: PseudoVSETLAMBDA_REG. Same RMW shape, but the new
+; encoding comes from the argument register, defensively masked to 3 bits
+; (andi + slli) instead of materialized as an immediate.
+
+define iXLen @vsetlambda_runtime(iXLen %enc) nounwind {
+; CHECK-LABEL: vsetlambda_runtime:
+; CHECK:       csrr [[VTYPE:[a-z0-9]+]], vtype
+; CHECK-NEXT:  li [[MASK:[a-z0-9]+]], 7
+; RV32-NEXT:   slli [[MASK]], [[MASK]], 28
+; RV64-NEXT:   slli [[MASK]], [[MASK]], 60
+; CHECK-NEXT:  not [[MASK]], [[MASK]]
+; CHECK-NEXT:  and [[VTYPE]], [[VTYPE]], [[MASK]]
+; CHECK-NEXT:  andi [[NEWENC:[a-z0-9]+]], a0, 7
+; RV32-NEXT:   slli [[NEWENC]], [[NEWENC]], 28
+; RV64-NEXT:   slli [[NEWENC]], [[NEWENC]], 60
+; CHECK-NEXT:  or [[VTYPE]], [[VTYPE]], [[NEWENC]]
+; CHECK-NEXT:  csrr [[AVL:[a-z0-9]+]], vl
+; CHECK-NEXT:  vsetvl [[AVL]], [[AVL]], [[VTYPE]]
+; CHECK-NEXT:  csrr [[RES:[a-z0-9]+]], vtype
+; RV32-NEXT:   srli [[RES]], [[RES]], 28
+; RV64-NEXT:   srli [[RES]], [[RES]], 60
+; CHECK-NEXT:  andi [[RES]], [[RES]], 7
+  %1 = call iXLen @llvm.riscv.vsetlambda.iXLen(iXLen %enc)
   ret iXLen %1
 }
 

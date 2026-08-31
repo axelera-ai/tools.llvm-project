@@ -201,6 +201,7 @@ bool RISCVExpandPseudo::expandMI(MachineBasicBlock &MBB,
   case RISCV::PseudoVSETVL_MATRIX:
     return expandPseudoVSETVLMatrix(MBB, MBBI);
   case RISCV::PseudoVSETLAMBDA:
+  case RISCV::PseudoVSETLAMBDA_REG:
     return expandPseudoVSETLAMBDA(MBB, MBBI);
   case RISCV::PseudoQUERYLAMBDA:
     return expandPseudoQUERYLAMBDA(MBB, MBBI);
@@ -623,9 +624,9 @@ bool RISCVExpandPseudo::expandPseudoVSETVLMatrix(
 bool RISCVExpandPseudo::expandPseudoVSETLAMBDA(
     MachineBasicBlock &MBB, MachineBasicBlock::iterator MBBI) {
   DebugLoc DL = MBBI->getDebugLoc();
+  bool IsReg = MBBI->getOpcode() == RISCV::PseudoVSETLAMBDA_REG;
   Register Dst = MBBI->getOperand(0).getReg();
   Register Scratch = MBBI->getOperand(1).getReg();
-  int64_t Encoding = MBBI->getOperand(2).getImm();
   unsigned XLen = STI->getXLen();
   unsigned Shift = XLen - 4;
 
@@ -652,9 +653,22 @@ bool RISCVExpandPseudo::expandPseudoVSETLAMBDA(
       .addReg(Dst)
       .addReg(Scratch);
 
-  // Scratch = encoding << Shift.
-  TII->movImm(MBB, MBBI, DL, Scratch, Encoding, MachineInstr::NoFlags,
-              /*DstRenamable=*/false, /*DstIsDead=*/false);
+  // Scratch = encoding << Shift. The immediate form materializes the
+  // compile-time encoding; the register form masks the runtime request to
+  // 3 bits (out-of-range values are UB at the intrinsic interface, but the
+  // mask keeps the write from corrupting other vtype fields). $encoding is
+  // guaranteed distinct from Dst and Scratch by the @earlyclobber output
+  // constraints, so it is still live here.
+  if (IsReg) {
+    Register EncReg = MBBI->getOperand(2).getReg();
+    BuildMI(MBB, MBBI, DL, TII->get(RISCV::ANDI), Scratch)
+        .addReg(EncReg)
+        .addImm(0x7);
+  } else {
+    int64_t Encoding = MBBI->getOperand(2).getImm();
+    TII->movImm(MBB, MBBI, DL, Scratch, Encoding, MachineInstr::NoFlags,
+                /*DstRenamable=*/false, /*DstIsDead=*/false);
+  }
   BuildMI(MBB, MBBI, DL, TII->get(RISCV::SLLI), Scratch)
       .addReg(Scratch)
       .addImm(Shift);

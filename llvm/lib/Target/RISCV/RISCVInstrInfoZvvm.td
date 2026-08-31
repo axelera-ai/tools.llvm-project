@@ -297,23 +297,35 @@ def PseudoVSETVL_MATRIX
 //===----------------------------------------------------------------------===//
 // Targeted lambda primitives.
 //
-// PseudoVSETLAMBDA: read-modify-write `vtype.lambda`. Expanded to a sequence
-// that reads current vtype, masks out the lambda bits, ORs in the new
-// encoding, reads current vl, emits a register-form `vsetvl` to commit the
-// updated vtype while preserving vl, and reads back the post-WARL-clamp
-// lambda field into $rd. The `$scratch` output exists only to give the
-// register allocator a second scratch register for the read-modify-write
-// sequence — its value is dead.
+// PseudoVSETLAMBDA / PseudoVSETLAMBDA_REG: read-modify-write `vtype.lambda`
+// with a compile-time (immediate) or runtime (GPR) encoding. Expanded to a
+// sequence that reads current vtype, masks out the lambda bits, ORs in the
+// new encoding (an encoding of 0 requests the spec's preserve-or-initialize
+// behavior in hardware), reads current vl, emits a register-form `vsetvl` to
+// commit the updated vtype while preserving vl, and reads back the
+// established (post-WARL) lambda field into $rd. The `$scratch` output
+// exists only to give the register allocator a second scratch register for
+// the read-modify-write sequence — its value is dead.
 //
 // PseudoQUERYLAMBDA: pure read of `vtype`. Extracts `vtype.lambda[2:0]` into
 // $rd. No vtype write, no scratch required.
 //===----------------------------------------------------------------------===//
 
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE],
-    Constraints = "@earlyclobber $rd,@earlyclobber $scratch" in
+    Constraints = "@earlyclobber $rd,@earlyclobber $scratch" in {
 def PseudoVSETLAMBDA
     : Pseudo<(outs GPR:$rd, GPR:$scratch), (ins ixlenimm_li:$encoding), []>,
       Sched<[WriteVSETVL, ReadVSETVL]>;
+
+// Register form for a runtime lambda encoding (spec: __riscv_vsetlambda
+// accepts a runtime request). Same expansion shape as PseudoVSETLAMBDA except
+// the new-encoding step masks $encoding to 3 bits (andi + slli) instead of
+// materializing an immediate. The @earlyclobber on both outputs guarantees
+// $encoding stays live (in a distinct register) until it is read mid-sequence.
+def PseudoVSETLAMBDA_REG
+    : Pseudo<(outs GPR:$rd, GPR:$scratch), (ins GPR:$encoding), []>,
+      Sched<[WriteVSETVL, ReadVSETVL]>;
+} // hasSideEffects = 1, ..., Constraints = "@earlyclobber ..."
 
 let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Uses = [VTYPE] in
 def PseudoQUERYLAMBDA
