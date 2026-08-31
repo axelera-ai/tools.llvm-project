@@ -1,5 +1,5 @@
 ; RUN: sed 's/iXLen/i64/g' %s | llc -mtriple=riscv64 \
-; RUN:   -mattr=+v,+experimental-zvvmm,+experimental-zvvmtls,+experimental-zvvmttls \
+; RUN:   -mattr=+v,+experimental-zvvi32mm,+experimental-zvvmtls,+experimental-zvvmttls \
 ; RUN:   -verify-machineinstrs | FileCheck %s
 
 ; Single-tile matrix multiply-accumulate kernel for the RISC-V Integrated

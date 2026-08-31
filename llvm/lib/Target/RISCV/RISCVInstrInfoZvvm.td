@@ -170,22 +170,25 @@ class ZvvmMACPat<Intrinsic intr, string pseudoBase,
               cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
               GPRNoX0:$vl)>;
 
-// Integer MACs. Rows: [pseudo base, C-type prefix, A/B-type prefix].
+// Integer MACs. Rows: [pseudo base, C-type prefix, A/B-type prefix,
+// per-type IME extension (spec tbl-extensions / tbl-int-encoding-map)].
+// Patterns are gated on the per-type extension, which implies the Zvvmm
+// family flag (the family flag alone enables only the MC instructions).
 //   vmmacc   (W=1): SEW(C) = EEW(A/B) ∈ {8, 16, 32, 64}
 //   vwmmacc  (W=2): (i16, i8), (i32, i16), (i64, i32)
 //   vqmmacc  (W=4): (i32, i8), (i64, i16)   — (i16, i4) deferred (no i4 IR)
 //   v8wmmacc (W=8): (i64, i8)               — (i32, i4) deferred (no i4 IR)
 defvar ZvvmIntMACRows = [
-  ["VMMACC",   "I8",  "I8"],
-  ["VMMACC",   "I16", "I16"],
-  ["VMMACC",   "I32", "I32"],
-  ["VMMACC",   "I64", "I64"],
-  ["VWMMACC",  "I16", "I8"],
-  ["VWMMACC",  "I32", "I16"],
-  ["VWMMACC",  "I64", "I32"],
-  ["VQMMACC",  "I32", "I8"],
-  ["VQMMACC",  "I64", "I16"],
-  ["V8WMMACC", "I64", "I8"],
+  ["VMMACC",   "I8",  "I8",  "Zvvi8mm"],
+  ["VMMACC",   "I16", "I16", "Zvvi16mm"],
+  ["VMMACC",   "I32", "I32", "Zvvi32mm"],
+  ["VMMACC",   "I64", "I64", "Zvvi64mm"],
+  ["VWMMACC",  "I16", "I8",  "Zvvi8i16mm"],
+  ["VWMMACC",  "I32", "I16", "Zvvi16i32mm"],
+  ["VWMMACC",  "I64", "I32", "Zvvi32i64mm"],
+  ["VQMMACC",  "I32", "I8",  "Zvvi8i32mm"],
+  ["VQMMACC",  "I64", "I16", "Zvvi16i64mm"],
+  ["V8WMMACC", "I64", "I8",  "Zvvi8i64mm"],
 ];
 
 foreach row = ZvvmIntMACRows in {
@@ -193,8 +196,9 @@ foreach row = ZvvmIntMACRows in {
     foreach abMX = ["M1", "M2", "M4", "M8"] in {
       defvar cti  = !cast<VTypeInfo>("V" # row[1] # cMX);
       defvar abti = !cast<VTypeInfo>("V" # row[2] # abMX);
-      let Predicates = !listconcat([HasStdExtZvvmm],
-                                   GetVTypeMinimalPredicates<cti>.Predicates) in
+      let Predicates = !listconcat(
+              [!cast<Predicate>("HasStdExt" # row[3])],
+              GetVTypeMinimalPredicates<cti>.Predicates) in
       def : ZvvmMACPat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0])),
                        row[0], cti, abti>;
     }
@@ -255,17 +259,23 @@ foreach cti = AllZvvmMACVTIs_F32 in
 //   vfwmmacc  (W=2): (f16, i8=OFP8), (f32, f16), (f64, f32)
 //   vfqmmacc  (W=4): (f32, i8=OFP8), (f64, f16)
 //   vf8wmmacc (W=8): (f64, i8=OFP8)
+// Rows: [pseudo base, C-type prefix, A/B-type prefix, per-type IME
+// extension (spec tbl-extensions / tbl-fp-encoding-map)]. Patterns are
+// gated on the per-type extension, which implies the Zvvfmm family flag.
+// BF16-format rows (Zvvbf16mm etc.) share the F16 IR container with the
+// FP16 rows — the per-type gating for BF16 is a Clang/vtype concern until
+// distinct BF16 rows exist.
 defvar ZvvmFPMACRows = [
-  ["VFMMACC",   "I8",  "I8"],
-  ["VFMMACC",   "F16", "F16"],
-  ["VFMMACC",   "F32", "F32"],
-  ["VFMMACC",   "F64", "F64"],
-  ["VFWMMACC",  "F16", "I8"],
-  ["VFWMMACC",  "F32", "F16"],
-  ["VFWMMACC",  "F64", "F32"],
-  ["VFQMMACC",  "F32", "I8"],
-  ["VFQMMACC",  "F64", "F16"],
-  ["VF8WMMACC", "F64", "I8"],
+  ["VFMMACC",   "I8",  "I8",  "Zvvofp8mm"],
+  ["VFMMACC",   "F16", "F16", "Zvvfp16mm"],
+  ["VFMMACC",   "F32", "F32", "Zvvfp32mm"],
+  ["VFMMACC",   "F64", "F64", "Zvvfp64mm"],
+  ["VFWMMACC",  "F16", "I8",  "Zvvofp8fp16mm"],
+  ["VFWMMACC",  "F32", "F16", "Zvvfp16fp32mm"],
+  ["VFWMMACC",  "F64", "F32", "Zvvfp32fp64mm"],
+  ["VFQMMACC",  "F32", "I8",  "Zvvofp8fp32mm"],
+  ["VFQMMACC",  "F64", "F16", "Zvvfp16fp64mm"],
+  ["VF8WMMACC", "F64", "I8",  "Zvvofp8fp64mm"],
 ];
 
 foreach row = ZvvmFPMACRows in {
@@ -273,9 +283,10 @@ foreach row = ZvvmFPMACRows in {
     foreach abMX = ["M1", "M2", "M4", "M8"] in {
       defvar cti  = !cast<VTypeInfo>("V" # row[1] # cMX);
       defvar abti = !cast<VTypeInfo>("V" # row[2] # abMX);
-      let Predicates = !listconcat([HasStdExtZvvfmm],
-                                   GetVTypeMinimalPredicates<cti>.Predicates,
-                                   GetVTypeMinimalPredicates<abti>.Predicates) in
+      let Predicates = !listconcat(
+              [!cast<Predicate>("HasStdExt" # row[3])],
+              GetVTypeMinimalPredicates<cti>.Predicates,
+              GetVTypeMinimalPredicates<abti>.Predicates) in
       def : ZvvmMACPat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0])),
                        row[0], cti, abti>;
     }

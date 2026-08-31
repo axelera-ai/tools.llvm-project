@@ -771,17 +771,14 @@ def HasStdExtZvvmttls : Predicate<"Subtarget->hasStdExtZvvmttls()">,
                         AssemblerPredicate<(all_of FeatureStdExtZvvmttls),
                             "'Zvvmttls' (Transposing Matrix Tile Load/Store)">;
 
-// Zvvfmm is the IME spec's umbrella name for the floating-point matrix
-// multiply-accumulate family (vfmmacc.vv and the widening variants). The spec
-// defines per-element-type sub-extensions (Zvvfp32mm, Zvvfp16mm, Zvvbf16mm,
-// Zvvfp64mm, Zvvofp8mm, plus widening combinations like Zvvfp16fp32mm) that
-// gate specific (SEW, altfmt) combinations of these mnemonics. At the LLVM
-// feature-flag layer we collapse those to a single umbrella for now, mirroring
-// how Zvvmm gates all four integer Mm-acc instructions in one shot. Whether a
-// given (SEW, altfmt) is legal on real hardware is a runtime property of vtype
-// the caller is responsible for; vsetvl-matrix programs it. Per-sub-extension
-// LLVM features can be added later when there's demand to constrain -march to
-// a single FP MAC sub-extension.
+// Zvvmm and Zvvfmm are the IME spec's family-level names for the integer and
+// floating-point matrix multiply-accumulate instruction families. The family
+// flags gate the instructions themselves at the MC layer (assembler /
+// disassembler availability). The spec additionally defines individual
+// per-input/output-type extensions (tbl-extensions) that gate specific
+// (SEW, altfmt_A/B, altfmt) encoding-map rows; those are modelled below as
+// per-type extensions, each implying its family flag plus its Zve dependency.
+// The family flags deliberately do NOT imply any per-type extension.
 def FeatureStdExtZvvfmm
     : RISCVExperimentalExtension<0, 1,
                                  "Floating-Point Matrix Multiply-Accumulate",
@@ -789,6 +786,156 @@ def FeatureStdExtZvvfmm
 def HasStdExtZvvfmm : Predicate<"Subtarget->hasStdExtZvvfmm()">,
                       AssemblerPredicate<(all_of FeatureStdExtZvvfmm),
                           "'Zvvfmm' (Floating-Point Matrix Multiply-Accumulate)">;
+
+// Per-type IME extensions (spec tbl-extensions). Integer extensions imply
+// Zvvmm; FP extensions imply Zvvfmm. Zve dependencies follow the spec table:
+// Zve64x for Int64-accumulator rows, Zve64d for FP64-accumulator rows,
+// Zve32x / Zve32f otherwise. Extensions whose rows have no backend/Clang
+// coverage yet (Int4 / OFP4 / OFP8-input-only / BF16 rows) are still defined
+// so the -march surface is complete; their ISel rows and builtins land with
+// the MX / alternate-format work. Microscaling extensions (Zvvx* / Zvvxn*,
+// tbl-mx-extensions) are not modelled yet.
+
+def FeatureStdExtZvvi4i8mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int4 Inputs, Int8 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi4i16mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int4 Inputs, Int16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi4i32mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int4 Inputs, Int32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi8mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int8 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi8i16mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int8 Inputs, Int16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi8i32mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int8 Inputs, Int32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi8i64mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int8 Inputs, Int64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve64x]>;
+def FeatureStdExtZvvi16mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int16 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi16i32mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int16 Inputs, Int32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi16i64mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int16 Inputs, Int64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve64x]>;
+def FeatureStdExtZvvi32mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int32 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve32x]>;
+def FeatureStdExtZvvi32i64mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int32 Inputs, Int64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve64x]>;
+def FeatureStdExtZvvi64mm
+    : RISCVExperimentalExtension<0, 1,
+          "Int64 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvmm, FeatureStdExtZve64x]>;
+
+def FeatureStdExtZvvofp4ofp8mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP4 Inputs, OFP8 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp4fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP4 Inputs, FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp4bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP4 Inputs, BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp4fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP4 Inputs, FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp8mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP8 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp8fp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP8 Inputs, FP16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp8bf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP8 Inputs, BFloat16 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp8fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP8 Inputs, FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvofp8fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "OFP8 Inputs, FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve64d]>;
+def FeatureStdExtZvvfp16mm
+    : RISCVExperimentalExtension<0, 1,
+          "FP16 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvfp16fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "FP16 Inputs, FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvfp16fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "FP16 Inputs, FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve64d]>;
+def FeatureStdExtZvvbf16mm
+    : RISCVExperimentalExtension<0, 1,
+          "BFloat16 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvbf16fp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "BFloat16 Inputs, FP32 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvbf16fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "BFloat16 Inputs, FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve64d]>;
+def FeatureStdExtZvvfp32mm
+    : RISCVExperimentalExtension<0, 1,
+          "FP32 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve32f]>;
+def FeatureStdExtZvvfp32fp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "FP32 Inputs, FP64 Accumulator Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve64d]>;
+def FeatureStdExtZvvfp64mm
+    : RISCVExperimentalExtension<0, 1,
+          "FP64 Matrix Multiply-Accumulate",
+          [FeatureStdExtZvvfmm, FeatureStdExtZve64d]>;
+
+// Predicates for the per-type extensions whose ISel pattern rows exist.
+// (Extensions with no covered rows yet get their Has* predicates when the
+// corresponding rows land.)
+foreach ext = ["Zvvi8mm", "Zvvi16mm", "Zvvi32mm", "Zvvi64mm",
+               "Zvvi8i16mm", "Zvvi16i32mm", "Zvvi32i64mm",
+               "Zvvi8i32mm", "Zvvi16i64mm", "Zvvi8i64mm",
+               "Zvvofp8mm", "Zvvfp16mm", "Zvvfp32mm", "Zvvfp64mm",
+               "Zvvofp8fp16mm", "Zvvfp16fp32mm", "Zvvfp32fp64mm",
+               "Zvvofp8fp32mm", "Zvvfp16fp64mm", "Zvvofp8fp64mm"] in
+  def "HasStdExt"#ext
+      : Predicate<"Subtarget->hasStdExt"#ext#"()">,
+        AssemblerPredicate<
+            (all_of !cast<SubtargetFeature>("FeatureStdExt"#ext)),
+            "'"#ext#"' (IME per-type Matrix Multiply-Accumulate)">;
 
 // Vector Cryptography and Bitmanip Extensions
 
