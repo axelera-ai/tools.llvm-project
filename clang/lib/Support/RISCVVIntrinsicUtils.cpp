@@ -553,6 +553,13 @@ PrototypeDescriptor::parsePrototypeDescriptor(
         llvm_unreachable("Invalid FixedSEW value, should be 8, 16, 32 or 64");
         return std::nullopt;
       }
+    } else if (ComplexTT.first == "ScalePair") {
+      uint32_t PairWidth;
+      if (ComplexTT.second.getAsInteger(10, PairWidth) || PairWidth != 16) {
+        llvm_unreachable("Invalid ScalePair value, must be 16 (E8M0 pairs)");
+        return std::nullopt;
+      }
+      VTM = VectorTypeModifier::ScalePairU16M1;
     } else if (ComplexTT.first == "LFixedLog2LMUL") {
       int32_t Log2LMUL;
       if (ComplexTT.second.getAsInteger(10, Log2LMUL)) {
@@ -789,6 +796,14 @@ void RVVType::applyModifier(const PrototypeDescriptor &Transformer) {
     break;
   case VectorTypeModifier::FixedSEW64:
     applyFixedSEW(64);
+    break;
+  case VectorTypeModifier::ScalePairU16M1:
+    // Zvvm/IME paired E8M0 block scales: one m1 register of unsigned 16-bit
+    // (scale_A, scale_B) pairs, independent of the operand's base type.
+    ElementBitwidth = 16;
+    ScalarType = ScalarTypeKind::UnsignedInteger;
+    LMUL = LMULType(0);
+    Scale = LMUL.getScale(ElementBitwidth);
     break;
   case VectorTypeModifier::LFixedLog2LMULN3:
     applyFixedLog2LMUL(-3, FixedLMULType::LargerThan);

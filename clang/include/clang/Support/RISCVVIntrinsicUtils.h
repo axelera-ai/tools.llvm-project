@@ -72,6 +72,12 @@ enum class VectorTypeModifier : uint8_t {
   Tuple6,
   Tuple7,
   Tuple8,
+  // Zvvm/IME: the paired E8M0 block-scale register operand of the
+  // microscaled MAC intrinsics — always vuint16m1_t regardless of the
+  // operand's base type. Combines a SEW change, an LMUL change, and a
+  // scalar-kind change, which no composition of the single-axis
+  // transformers above can express (one vector-type modifier per operand).
+  ScalePairU16M1,
 };
 
 // Similar to basic type but used to describe what's kind of type related to
