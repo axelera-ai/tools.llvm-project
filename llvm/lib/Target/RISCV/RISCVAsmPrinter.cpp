@@ -1243,6 +1243,16 @@ static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
       OutMI.addOperand(lowerVectorReg(MI->getOperand(OpNo), TRI));
     return true;
   }
+  case MACScaled: {
+    // Pseudo: vd_wb (def), vd (tied), vs1, vs2, scale (VMV0Pair = v0), vl.
+    // Real: vd_wb, vd, vs1, vs2, v0.scale. The scale operand is pinned to
+    // v0 by its register class; the real instruction's VScaleOp operand
+    // encodes it as vm=0.
+    for (unsigned OpNo = 0; OpNo < 4; ++OpNo)
+      OutMI.addOperand(lowerVectorReg(MI->getOperand(OpNo), TRI));
+    OutMI.addOperand(MCOperand::createReg(RISCV::V0));
+    return true;
+  }
   case TileLoad: {
     // Pseudo operand layout: vd (def), passthru (tied use), rs1, rs2, lambda, vl.
     OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vd

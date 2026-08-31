@@ -14,6 +14,11 @@
 //
 //===----------------------------------------------------------------------===//
 
+// Concrete type of the Zvvm paired-scale register: one m1 register of 16-bit
+// (scale_A, scale_B) pairs = vuint16m1_t. (Named locally; the llvm_nxv*_ty
+// shorthands are private to other targets' .td files.)
+def llvm_zvvm_scale_ty : LLVMType<nxv4i16>;
+
 let TargetPrefix = "riscv" in {
   //===--------------------------------------------------------------------===//
   // Extended vsetvl: programs the full vtype CSR including the matrix-specific
@@ -145,13 +150,55 @@ let TargetPrefix = "riscv" in {
   // at 8-bit) lives in vtype.altfmt_A / vtype.altfmt_B and must be programmed
   // via vsetvl_matrix before the call.
   //
-  // vm is hardcoded to 1 (unscaled) at the encoding layer in Phase 1. The
-  // spec uses vm=0 to select microscaled (MX*) operation with paired E8M0
-  // scale factors in v0 — not exposed as IR intrinsics yet.
+  // These are the unscaled (vm=1) forms; the microscaled (vm=0) forms are
+  // the separate *_scaled intrinsics below.
   def int_riscv_vfmmacc   : RISCVMatrixMAC; // W = 1
   def int_riscv_vfwmmacc  : RISCVMatrixMAC; // W = 2
   def int_riscv_vfqmmacc  : RISCVMatrixMAC; // W = 4
   def int_riscv_vf8wmmacc : RISCVMatrixMAC; // W = 8
+
+  // Microscaled (vm=0, `v0.scale`) matrix multiply-accumulate:
+  //   (C, A, B, scale, bs, vl) -> C
+  //
+  // - C / A / B as in RISCVMatrixMAC.
+  // - scale is the paired E8M0 block-scale register: one full vector
+  //   register of 16-bit (scale_A, scale_B) pairs (vuint16m1_t = nxv4i16).
+  //   The instruction reads it from v0; ISel constrains the operand to the
+  //   VMV0Pair register class.
+  // - bs is an ImmArg in {0, 1} recording the microscaling block size the
+  //   caller compiled against (0 = 32 elements, 1 = 16 elements). It is a
+  //   SEMANTIC RECORD ONLY and is dropped during selection: the
+  //   architectural block size comes from vtype.bs, which the caller must
+  //   program via vsetvl_matrix — exactly as input signedness (altfmt_A/B)
+  //   and the FP formats are vtype state that the sign/format-specific C
+  //   entry points record but do not themselves program.
+  // - vl matches XLEN.
+  //
+  // The FP-input scaled forms pair with vfwmmacc/vfqmmacc/vf8wmmacc (the
+  // vm=1 encodings of the same opcodes); vfmmacc has no scaled form (vm=0
+  // reserved). The integer-input forms (vfwimmacc / vfqimmacc / vf8wimmacc,
+  // MXINT inputs, FP accumulator) exist only in microscaled form — their
+  // vm=1 encodings are vwmmacc / vqmmacc / v8wmmacc.
+  class RISCVMatrixMACScaled
+      : DefaultAttrsIntrinsic<[llvm_anyvector_ty],
+                              [LLVMMatchType<0>,     // C
+                               llvm_anyvector_ty,    // A
+                               LLVMMatchType<1>,     // B
+                               llvm_zvvm_scale_ty,      // paired E8M0 scales
+                               llvm_anyint_ty,       // bs (semantic record)
+                               LLVMMatchType<2>],    // vl
+                              [IntrNoMem, ImmArg<ArgIndex<4>>,
+                               Range<ArgIndex<4>, 0, 2>]>,
+        RISCVVIntrinsic {
+    let VLOperand = 5;
+  }
+
+  def int_riscv_vfwmmacc_scaled  : RISCVMatrixMACScaled; // W = 2, FP inputs
+  def int_riscv_vfqmmacc_scaled  : RISCVMatrixMACScaled; // W = 4, FP inputs
+  def int_riscv_vf8wmmacc_scaled : RISCVMatrixMACScaled; // W = 8, FP inputs
+  def int_riscv_vfwimmacc  : RISCVMatrixMACScaled; // W = 2, MXINT8 inputs
+  def int_riscv_vfqimmacc  : RISCVMatrixMACScaled; // W = 4, MXINT inputs
+  def int_riscv_vf8wimmacc : RISCVMatrixMACScaled; // W = 8, MXINT inputs
 
   // EMUL_C = 16 (m16 accumulator) matrix multiply-accumulate: same
   // (C, A, B, vl) -> C shape, but the C accumulator is a 16-register-aligned
@@ -182,6 +229,30 @@ let TargetPrefix = "riscv" in {
   def int_riscv_vfwmmacc_m16  : RISCVMatrixMACM16; // W = 2, FP
   def int_riscv_vfqmmacc_m16  : RISCVMatrixMACM16; // W = 4, FP
   def int_riscv_vf8wmmacc_m16 : RISCVMatrixMACM16; // W = 8, FP
+
+  // EMUL_C = 16 microscaled forms: RISCVMatrixMACScaled with the tuple-typed
+  // m16 accumulator. Same scale / bs operand semantics as the M1..M8 scaled
+  // class (bs is a semantic record; vtype.bs is the architectural state).
+  class RISCVMatrixMACScaledM16
+      : DefaultAttrsIntrinsic<[llvm_any_ty],
+                              [LLVMMatchType<0>,     // C (m16 tuple)
+                               llvm_anyvector_ty,    // A
+                               LLVMMatchType<1>,     // B
+                               llvm_zvvm_scale_ty,      // paired E8M0 scales
+                               llvm_anyint_ty,       // bs (semantic record)
+                               LLVMMatchType<2>],    // vl
+                              [IntrNoMem, ImmArg<ArgIndex<4>>,
+                               Range<ArgIndex<4>, 0, 2>]>,
+        RISCVVIntrinsic {
+    let VLOperand = 5;
+  }
+
+  def int_riscv_vfwmmacc_scaled_m16  : RISCVMatrixMACScaledM16; // W = 2, FP
+  def int_riscv_vfqmmacc_scaled_m16  : RISCVMatrixMACScaledM16; // W = 4, FP
+  def int_riscv_vf8wmmacc_scaled_m16 : RISCVMatrixMACScaledM16; // W = 8, FP
+  def int_riscv_vfwimmacc_m16  : RISCVMatrixMACScaledM16; // W = 2, MXINT8
+  def int_riscv_vfqimmacc_m16  : RISCVMatrixMACScaledM16; // W = 4, MXINT
+  def int_riscv_vf8wimmacc_m16 : RISCVMatrixMACScaledM16; // W = 8, MXINT
 
   //===--------------------------------------------------------------------===//
   // Tile load/store (Zvvmtls / Zvvmttls).

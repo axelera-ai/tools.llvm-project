@@ -138,6 +138,8 @@ def V8WMMACC_VV : RVInstVMatrixMAC<0b111011, "v8wmmacc.vv">;
 //                              → real (vs3, rs1, rs2, lambda, zero_reg)
 //   4 = Tile store masked    — pseudo (vs3, rs1, rs2, lambda, V0, vl)
 //                              → real (vs3, rs1, rs2, lambda, V0)
+//   5 = MAC scaled (vm=0)    — pseudo (vd_wb, vd, vs1, vs2, scale, vl)
+//                              → real (vd_wb, vd, vs1, vs2, V0)
 class RISCVMatrixPseudo<Instruction realInst, int kind> {
   Pseudo Pseudo = !cast<Pseudo>(NAME);
   Instruction BaseInstr = realInst;
@@ -444,6 +446,154 @@ foreach row = ZvvmFPMACRows in {
             GetVTypeMinimalPredicates<abti>.Predicates) in
     def : ZvvmMACM16Pat<!cast<Intrinsic>("int_riscv_" # !tolower(row[0]) # "_m16"),
                         row[0], abti>;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Microscaled (vm=0, `v0.scale`) MAC pseudos and ISel patterns.
+//
+// The scale operand is a full register of paired E8M0 block scales pinned to
+// v0 through the VMV0Pair register class (nxv4i16 = vuint16m1_t). The `bs`
+// immarg of the *_scaled / vf*immacc intrinsics is a semantic record of the
+// block size the caller compiled against and is dropped here — the
+// architectural block size is vtype.bs, programmed by the caller via
+// vsetvl_matrix (exactly as altfmt_A/altfmt_B carry signedness/format).
+//
+// Pattern rows follow the MX columns of the spec encoding maps at EEW >= 8
+// (4-bit MXINT4 / MXFP4 input rows are deferred — no 4-bit IR element type):
+//   vfwmmacc.vv  vm=0: (F16 accum, I8 = MXFP8 inputs)   Zvvxofp8fp16mm
+//   vfqmmacc.vv  vm=0: (F32 accum, I8 = MXFP8 inputs)   Zvvxofp8fp32mm
+//   vf8wmmacc.vv vm=0: (F64 accum, I8 = MXFP8 inputs)   Zvvxofp8fp64mm
+//   vfwimmacc.vv:      (F16 accum, I8 = MXINT8 inputs)  Zvvxi8fp16mm
+//   vfqimmacc.vv:      (F32 accum, I8 = MXINT8 inputs)  Zvvxi8fp32mm
+//   vf8wimmacc.vv:     (F64 accum, I8 = MXINT8 inputs)  Zvvxi8fp64mm
+// BF16-accumulator MX rows share the F16 IR container (vtype.altfmt selects
+// the format); BS=16 rows share the BS=32 patterns (bs is not encoded).
+//===----------------------------------------------------------------------===//
+
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
+    Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in {
+class PseudoVMatrixMACPairScaled<Instruction realInst,
+                                 VTypeInfo cti, VTypeInfo abti>
+    : Pseudo<(outs cti.RegClass:$vd_wb),
+             (ins cti.RegClass:$vd, abti.RegClass:$vs1,
+                  abti.RegClass:$vs2, VMV0Pair:$scale, GPRNoX0:$vl), []>,
+      RISCVMatrixPseudo<realInst, /*MACScaled=*/5>;
+
+class PseudoVMatrixMACPairScaledM16<Instruction realInst, VTypeInfo abti>
+    : Pseudo<(outs VRN2M8:$vd_wb),
+             (ins VRN2M8:$vd, abti.RegClass:$vs1,
+                  abti.RegClass:$vs2, VMV0Pair:$scale, GPRNoX0:$vl), []>,
+      RISCVMatrixPseudo<realInst, /*MACScaled=*/5>;
+} // hasSideEffects = 0, ..., Constraints
+
+// FP scaled pseudo grids (vm=0 forms of the FP widening mnemonics).
+let Predicates = [HasStdExtZvvfmm] in {
+foreach cti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in {
+    def "PseudoVFWMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX#"_SCALED"
+        : PseudoVMatrixMACPairScaled<VFWMMACC_VV_SCALE, cti, abti>;
+    def "PseudoVFQMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX#"_SCALED"
+        : PseudoVMatrixMACPairScaled<VFQMMACC_VV_SCALE, cti, abti>;
+    def "PseudoVF8WMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX#"_SCALED"
+        : PseudoVMatrixMACPairScaled<VF8WMMACC_VV_SCALE, cti, abti>;
+  }
+foreach abti = AllZvvmMACVTIs_F32 in {
+  def "PseudoVFWMMACC_VV_M16_"#abti.LMul.MX#"_SCALED"
+      : PseudoVMatrixMACPairScaledM16<VFWMMACC_VV_SCALE, abti>;
+  def "PseudoVFQMMACC_VV_M16_"#abti.LMul.MX#"_SCALED"
+      : PseudoVMatrixMACPairScaledM16<VFQMMACC_VV_SCALE, abti>;
+  def "PseudoVF8WMMACC_VV_M16_"#abti.LMul.MX#"_SCALED"
+      : PseudoVMatrixMACPairScaledM16<VF8WMMACC_VV_SCALE, abti>;
+}
+} // Predicates = [HasStdExtZvvfmm]
+
+// Integer-input (MXINT) pseudo grids: MX-only instructions.
+let Predicates = [HasZvvmMXVfwimmacc] in {
+foreach cti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in
+    def "PseudoVFWIMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPairScaled<VFWIMMACC_VV, cti, abti>;
+foreach abti = AllZvvmMACVTIs_F32 in
+  def "PseudoVFWIMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairScaledM16<VFWIMMACC_VV, abti>;
+}
+let Predicates = [HasZvvmMXVfqimmacc] in {
+foreach cti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in
+    def "PseudoVFQIMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPairScaled<VFQIMMACC_VV, cti, abti>;
+foreach abti = AllZvvmMACVTIs_F32 in
+  def "PseudoVFQIMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairScaledM16<VFQIMMACC_VV, abti>;
+}
+let Predicates = [HasZvvmMXVf8wimmacc] in {
+foreach cti = AllZvvmMACVTIs_F32 in
+  foreach abti = AllZvvmMACVTIs_F32 in
+    def "PseudoVF8WIMMACC_VV_"#cti.LMul.MX#"_"#abti.LMul.MX
+        : PseudoVMatrixMACPairScaled<VF8WIMMACC_VV, cti, abti>;
+foreach abti = AllZvvmMACVTIs_F32 in
+  def "PseudoVF8WIMMACC_VV_M16_"#abti.LMul.MX
+      : PseudoVMatrixMACPairScaledM16<VF8WIMMACC_VV, abti>;
+}
+
+class ZvvmMACScaledPat<Intrinsic intr, string pseudoBase, string suffix,
+                       VTypeInfo cti, VTypeInfo abti>
+    : Pat<(cti.Vector (intr (cti.Vector cti.RegClass:$vd),
+                            (abti.Vector abti.RegClass:$vs1),
+                            (abti.Vector abti.RegClass:$vs2),
+                            (nxv4i16 VMV0Pair:$scale),
+                            (XLenVT timm),
+                            (XLenVT GPRNoX0:$vl))),
+          (!cast<Instruction>("Pseudo"#pseudoBase#"_VV_"#cti.LMul.MX#"_"#
+                              abti.LMul.MX#suffix)
+              cti.RegClass:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
+              VMV0Pair:$scale, GPRNoX0:$vl)>;
+
+class ZvvmMACScaledM16Pat<Intrinsic intr, string pseudoBase, string suffix,
+                          VTypeInfo abti>
+    : Pat<(riscv_nxv64i8x2 (intr (riscv_nxv64i8x2 VRN2M8:$vd),
+                                 (abti.Vector abti.RegClass:$vs1),
+                                 (abti.Vector abti.RegClass:$vs2),
+                                 (nxv4i16 VMV0Pair:$scale),
+                                 (XLenVT timm),
+                                 (XLenVT GPRNoX0:$vl))),
+          (!cast<Instruction>("Pseudo"#pseudoBase#"_VV_M16_"#abti.LMul.MX#
+                              suffix)
+              VRN2M8:$vd, abti.RegClass:$vs1, abti.RegClass:$vs2,
+              VMV0Pair:$scale, GPRNoX0:$vl)>;
+
+// Rows: [pseudo base, pseudo suffix, intrinsic, C-type prefix, A/B-type
+// prefix, MX extension].
+defvar ZvvmMXMACRows = [
+  ["VFWMMACC",   "_SCALED", "vfwmmacc_scaled",  "F16", "I8", "Zvvxofp8fp16mm"],
+  ["VFQMMACC",   "_SCALED", "vfqmmacc_scaled",  "F32", "I8", "Zvvxofp8fp32mm"],
+  ["VF8WMMACC",  "_SCALED", "vf8wmmacc_scaled", "F64", "I8", "Zvvxofp8fp64mm"],
+  ["VFWIMMACC",  "",        "vfwimmacc",        "F16", "I8", "Zvvxi8fp16mm"],
+  ["VFQIMMACC",  "",        "vfqimmacc",        "F32", "I8", "Zvvxi8fp32mm"],
+  ["VF8WIMMACC", "",        "vf8wimmacc",       "F64", "I8", "Zvvxi8fp64mm"],
+];
+
+foreach row = ZvvmMXMACRows in {
+  foreach cMX = ["M1", "M2", "M4", "M8"] in {
+    foreach abMX = ["M1", "M2", "M4", "M8"] in {
+      defvar cti  = !cast<VTypeInfo>("V" # row[3] # cMX);
+      defvar abti = !cast<VTypeInfo>("V" # row[4] # abMX);
+      let Predicates = !listconcat(
+              [!cast<Predicate>("HasStdExt" # row[5])],
+              GetVTypeMinimalPredicates<cti>.Predicates,
+              GetVTypeMinimalPredicates<abti>.Predicates) in
+      def : ZvvmMACScaledPat<!cast<Intrinsic>("int_riscv_" # row[2]),
+                             row[0], row[1], cti, abti>;
+    }
+  }
+  foreach abMX = ["M1", "M2", "M4", "M8"] in {
+    defvar abti = !cast<VTypeInfo>("V" # row[4] # abMX);
+    let Predicates = !listconcat(
+            [!cast<Predicate>("HasStdExt" # row[5])],
+            GetVTypeMinimalPredicates<abti>.Predicates) in
+    def : ZvvmMACScaledM16Pat<!cast<Intrinsic>("int_riscv_" # row[2] # "_m16"),
+                              row[0], row[1], abti>;
   }
 }
 
