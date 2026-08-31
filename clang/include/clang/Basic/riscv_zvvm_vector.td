@@ -54,6 +54,10 @@ include "riscv_vector_common.td"
 //                                size_t altfmt_a, size_t altfmt_b);
 //===----------------------------------------------------------------------===//
 
+// Configuration and query primitives stay gated on the FAMILY flag
+// (experimental-zvvmm): the spec ties vtype configuration to the Zvvm family
+// as a whole, not to any per-type extension. MAC builtins below are gated on
+// their per-type IME extension (which implies the family flag).
 let RequiredFeatures = ["experimental-zvvmm"],
     SupportOverloading = false,
     HasVL = false,
@@ -280,6 +284,9 @@ class ABLog2LMULTransformer<int cLog2, int abLog2> {
 // The accumulator element is architecturally always signed; the `u{sew}`
 // accumulator type of the uu variant mirrors the spec's C API, which types
 // the whole computation over vuint for unsigned data.
+// All four sign combos of a row share that row's per-type IME extension:
+// the encoding-map rows differ only in the altfmt_A/altfmt_B bits, which
+// belong to the same extension.
 // Fields: [accum token prefix, name suffix, vd/ret char, vs1 char, vs2 char]
 defvar ZvvmIntMACSignCombos = [
   ["i", "",    "v",  "v",  "v"],
@@ -292,9 +299,17 @@ defvar ZvvmIntMACSignCombos = [
 // and [TypeRange char, C-type token] for the FP side. BF16 and OFP8
 // accumulator types are deferred (no Clang vector types / altfmt-driven —
 // they land with the MX / alternate-format work).
-defvar ZvvmNonWideningIntMACSEWs = [["c", "8"], ["s", "16"],
-                                    ["i", "32"], ["l", "64"]];
-defvar ZvvmNonWideningFPMACRows  = [["x", "f16"], ["f", "f32"], ["d", "f64"]];
+defvar ZvvmNonWideningIntMACSEWs = [
+  ["c", "8",  "experimental-zvvi8mm"],
+  ["s", "16", "experimental-zvvi16mm"],
+  ["i", "32", "experimental-zvvi32mm"],
+  ["l", "64", "experimental-zvvi64mm"],
+];
+defvar ZvvmNonWideningFPMACRows  = [
+  ["x", "f16", "experimental-zvvfp16mm"],
+  ["f", "f32", "experimental-zvvfp32mm"],
+  ["d", "f64", "experimental-zvvfp64mm"],
+];
 
 foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
   foreach abLog2 = [0, 1, 2, 3] in {  // LMUL   ∈ {1,2,4,8}
@@ -307,7 +322,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
       foreach sc = ZvvmIntMACSignCombos in {
         defvar intName = "vmmacc_vv_" # sc[0] # sew[1] # "m" # emul_c
                          # sc[1] # lmSuffix;
-        let RequiredFeatures = ["experimental-zvvmm"],
+        let RequiredFeatures = [sew[2]],
             HasMasked = false,
             UnMaskedPolicyScheme = NonePolicy,
             Log2LMUL = [cLog2],
@@ -324,7 +339,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 
     foreach fpRow = ZvvmNonWideningFPMACRows in {
       defvar fpName = "vfmmacc_vv_" # fpRow[1] # "m" # emul_c # lmSuffix;
-      let RequiredFeatures = ["experimental-zvvfmm"],
+      let RequiredFeatures = [fpRow[2]],
           HasMasked = false,
           UnMaskedPolicyScheme = NonePolicy,
           Log2LMUL = [cLog2],
@@ -366,17 +381,17 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 //   vfqmmacc (W=4): f64←f16
 // (vf8wmmacc's only rows are OFP4/OFP8-input — fully deferred.)
 defvar ZvvmIntWideningMACRows = [
-  ["vwmmacc",  "s", "16", "8"],
-  ["vwmmacc",  "i", "32", "16"],
-  ["vwmmacc",  "l", "64", "32"],
-  ["vqmmacc",  "i", "32", "8"],
-  ["vqmmacc",  "l", "64", "16"],
-  ["v8wmmacc", "l", "64", "8"],
+  ["vwmmacc",  "s", "16", "8",  "experimental-zvvi8i16mm"],
+  ["vwmmacc",  "i", "32", "16", "experimental-zvvi16i32mm"],
+  ["vwmmacc",  "l", "64", "32", "experimental-zvvi32i64mm"],
+  ["vqmmacc",  "i", "32", "8",  "experimental-zvvi8i32mm"],
+  ["vqmmacc",  "l", "64", "16", "experimental-zvvi16i64mm"],
+  ["v8wmmacc", "l", "64", "8",  "experimental-zvvi8i64mm"],
 ];
 defvar ZvvmFPWideningMACRows = [
-  ["vfwmmacc", "f", "f32", "16"],
-  ["vfwmmacc", "d", "f64", "32"],
-  ["vfqmmacc", "d", "f64", "16"],
+  ["vfwmmacc", "f", "f32", "16", "experimental-zvvfp16fp32mm"],
+  ["vfwmmacc", "d", "f64", "32", "experimental-zvvfp32fp64mm"],
+  ["vfqmmacc", "d", "f64", "16", "experimental-zvvfp16fp64mm"],
 ];
 
 foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
@@ -397,7 +412,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
       foreach sc = ZvvmIntMACSignCombos in {
         defvar wName = row[0] # "_vv_" # sc[0] # row[2] # "m" # emul_c
                        # sc[1] # lmSuffix;
-        let RequiredFeatures = ["experimental-zvvmm"],
+        let RequiredFeatures = [row[4]],
             HasMasked = false,
             UnMaskedPolicyScheme = NonePolicy,
             Log2LMUL = [abLog2],
@@ -413,7 +428,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
     foreach row = ZvvmFPWideningMACRows in {
       defvar wName = row[0] # "_vv_" # row[2] # "m" # emul_c # lmSuffix;
       defvar abTfm = "(FixedSEW:" # row[3] # ")";
-      let RequiredFeatures = ["experimental-zvvfmm"],
+      let RequiredFeatures = [row[4]],
           HasMasked = false,
           UnMaskedPolicyScheme = NonePolicy,
           Log2LMUL = [abLog2],

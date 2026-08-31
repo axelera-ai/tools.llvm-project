@@ -10,7 +10,7 @@
 //         -target-feature +d
 //         -target-feature +experimental-zvvmm
 //         -target-feature +experimental-zvvmtls
-//         -target-feature +experimental-zvvfmm
+//         -target-feature +experimental-zvvfp32mm
 //         -O2 -S -nostdsysteminc
 //         -internal-isystem <clang-resource>/include
 //         zvvm_fp_gemm_main.c -o zvvm_fp_gemm.s

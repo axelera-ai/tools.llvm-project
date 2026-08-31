@@ -2,7 +2,7 @@
 //
 // Build (RV64, freestanding, assembly):
 //   clang -cc1 -triple riscv64 -target-feature +v \
-//         -target-feature +experimental-zvvmm \
+//         -target-feature +experimental-zvvi32mm \
 //         -target-feature +experimental-zvvmtls \
 //         -O2 -S -nostdsysteminc \
 //         -internal-isystem <clang-resource>/include \

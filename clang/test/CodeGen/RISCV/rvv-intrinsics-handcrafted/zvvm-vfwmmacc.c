@@ -1,6 +1,6 @@
 // REQUIRES: riscv-registered-target
 // RUN: %clang_cc1 -triple riscv64 -target-feature +v -target-feature +zvfh \
-// RUN:   -target-feature +experimental-zvvfmm \
+// RUN:   -target-feature +experimental-zvvfp16fp32mm -target-feature +experimental-zvvfp32fp64mm \
 // RUN:   -O2 -emit-llvm %s -o - | FileCheck %s
 
 #pragma clang riscv intrinsic zvvm_vector
