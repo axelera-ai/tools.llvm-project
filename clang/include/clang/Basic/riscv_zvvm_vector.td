@@ -229,9 +229,9 @@ let RequiredFeatures = ["experimental-zvvmm"],
 // vd is read+written, so the builtin's first vector argument is the
 // passthrough accumulator.
 //
-// Widening MACs (vwmmacc / vqmmacc / v8wmmacc and the FP siblings) are
-// deferred: they additionally need varying SEW(A) ≠ SEW(C) on top of
-// EMUL_C ≠ LMUL.
+// The widening MACs (vwmmacc / vqmmacc / v8wmmacc and the FP siblings)
+// additionally vary SEW(A/B) = SEW(C)/W and are emitted further below over
+// the same (EMUL_C, LMUL) grid, one set per (SEW(C), EEW(A/B)) combination.
 //===----------------------------------------------------------------------===//
 
 // Select the right per-operand Log2LMUL transformer based on the
@@ -290,6 +290,85 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
         OverloadedName = fpName,
         IRName = "vfmmacc" in
       def : RVVBuiltin<"", "vv"#abTfm#"v"#abTfm#"v", "f">;
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Zvvmm / Zvvfmm: widening matrix multiply-accumulate (vwmmacc.vv,
+// vqmmacc.vv, v8wmmacc.vv, vfwmmacc.vv, vfqmmacc.vv).
+//
+// Same two-axis (EMUL_C, LMUL) grid as the non-widening MACs, plus the
+// widening axis: vs1/vs2 have EEW = SEW(C) / W. Because the prototype
+// language allows only one vector-type transformer per operand, each def is
+// based on the C element type at Log2LMUL = abLog2 (the A/B LMUL):
+//   * vd / return use `(S/SE/L FixedLog2LMUL:cLog2)v` — C type at EMUL_C
+//     (FixedLog2LMUL keeps the element type, swaps LMUL);
+//   * vs1 / vs2 use `(FixedSEW:EEW)v` — input element width at the def's
+//     own LMUL (FixedSEW keeps LMUL and the scalar kind, so an FP base
+//     yields _Float16/float inputs and an integer base yields intN_t).
+//
+// One name per (SEW(C), EEW) row: the type-suffix encodes the accumulator
+// type and EMUL_C; `_lm{N}` (N > 1) encodes the A/B LMUL. Rows with 4-bit
+// inputs (Int4 / OFP4) and OFP8 inputs are deferred — Clang has no vector
+// types for them yet (they land with the MX / alternate-format work).
+//
+// Covered rows: [IR name, TypeRange char (C type), C-type token, input EEW]
+//   vwmmacc  (W=2): i16←i8, i32←i16, i64←i32
+//   vqmmacc  (W=4): i32←i8, i64←i16
+//   v8wmmacc (W=8): i64←i8
+//   vfwmmacc (W=2): f32←f16, f64←f32
+//   vfqmmacc (W=4): f64←f16
+// (vf8wmmacc's only rows are OFP4/OFP8-input — fully deferred.)
+defvar ZvvmIntWideningMACRows = [
+  ["vwmmacc",  "s", "i16", "8"],
+  ["vwmmacc",  "i", "i32", "16"],
+  ["vwmmacc",  "l", "i64", "32"],
+  ["vqmmacc",  "i", "i32", "8"],
+  ["vqmmacc",  "l", "i64", "16"],
+  ["v8wmmacc", "l", "i64", "8"],
+];
+defvar ZvvmFPWideningMACRows = [
+  ["vfwmmacc", "f", "f32", "16"],
+  ["vfwmmacc", "d", "f64", "32"],
+  ["vfqmmacc", "d", "f64", "16"],
+];
+
+foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
+  foreach abLog2 = [0, 1, 2, 3] in {  // LMUL   ∈ {1,2,4,8}
+    // Builtin base Log2LMUL is abLog2, so the vd transformer pins cLog2
+    // relative to it (arguments swapped vs the non-widening grid above).
+    defvar cdTfm  = ABLog2LMULTransformer<abLog2, cLog2>.Str;
+    defvar emul_c = !shl(1, cLog2);
+    defvar lmul   = !shl(1, abLog2);
+    defvar lmSuffix = !if(!eq(abLog2, 0), "", "_lm" # lmul);
+
+    foreach row = ZvvmIntWideningMACRows in {
+      defvar wName = row[0] # "_vv_" # row[2] # "m" # emul_c # lmSuffix;
+      defvar abTfm = "(FixedSEW:" # row[3] # ")";
+      let RequiredFeatures = ["experimental-zvvmm"],
+          HasMasked = false,
+          UnMaskedPolicyScheme = NonePolicy,
+          Log2LMUL = [abLog2],
+          IntrinsicTypes = [-1, 1],
+          Name = wName,
+          OverloadedName = wName,
+          IRName = row[0] in
+        def : RVVBuiltin<"", cdTfm#"v"#cdTfm#"v"#abTfm#"v"#abTfm#"v", row[1]>;
+    }
+
+    foreach row = ZvvmFPWideningMACRows in {
+      defvar wName = row[0] # "_vv_" # row[2] # "m" # emul_c # lmSuffix;
+      defvar abTfm = "(FixedSEW:" # row[3] # ")";
+      let RequiredFeatures = ["experimental-zvvfmm"],
+          HasMasked = false,
+          UnMaskedPolicyScheme = NonePolicy,
+          Log2LMUL = [abLog2],
+          IntrinsicTypes = [-1, 1],
+          Name = wName,
+          OverloadedName = wName,
+          IRName = row[0] in
+        def : RVVBuiltin<"", cdTfm#"v"#cdTfm#"v"#abTfm#"v"#abTfm#"v", row[1]>;
+    }
   }
 }
 
