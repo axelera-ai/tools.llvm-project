@@ -26,9 +26,14 @@
 //   * vmtl_v / vmts_v   — order-preserving tile load / store (Zvvmtls).
 //   * vmttl_v / vmtts_v — transposing tile load / store (Zvvmttls).
 //     All four cover LMUL ∈ {1,2,4,8}, every element type at
-//     i8/i16/i32/i64/f16/f32/f64, in default-lambda and per-instruction
-//     `_L{N}` override forms, unmasked and masked (`_m`, mask-first per the
-//     spec's canonical suffix order {type-suffix}[_L{N}][_m]).
+//     i8/i16/i32/i64/u8/u16/u32/u64/f16/f32/f64, in default-lambda and
+//     per-instruction `_L{N}` override forms, unmasked and masked (`_m`,
+//     mask-first per the spec's canonical suffix order
+//     {type-suffix}[_as_e{S}][_L{N}][_m]). The order-preserving pair
+//     additionally has the storage-width-qualified `_as_e{S}` forms
+//     (S ∈ {8,16,32,64} ≥ logical width) for packed narrow tiles.
+//     Non-ISO element types (bf16, OFP8, OFP4, int4) are deferred with the
+//     MX/format phase.
 //
 //===----------------------------------------------------------------------===//
 
@@ -472,10 +477,23 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 // convention of the unsuffixed RVV forms.
 //===----------------------------------------------------------------------===//
 
-// (TypeRange char, C type token) pairs used to spell explicit names.
-defvar ZvvmTileTypePairs = [["c", "i8"],  ["s", "i16"], ["i", "i32"],
-                            ["l", "i64"], ["x", "f16"], ["f", "f32"],
-                            ["d", "f64"]];
+// (TypeRange char, C type token, load prototype, store prototype) rows used
+// to spell explicit names. The unsigned rows reuse the signed TypeRange char
+// with the `U` modifier in the prototype (same signless IR intrinsic; the
+// suffix token differs).
+defvar ZvvmTileTypeCells = [
+  ["c", "i8",  "vPCez",   "0Pezv"],
+  ["s", "i16", "vPCez",   "0Pezv"],
+  ["i", "i32", "vPCez",   "0Pezv"],
+  ["l", "i64", "vPCez",   "0Pezv"],
+  ["x", "f16", "vPCez",   "0Pezv"],
+  ["f", "f32", "vPCez",   "0Pezv"],
+  ["d", "f64", "vPCez",   "0Pezv"],
+  ["c", "u8",  "UvPCUez", "0PUezUv"],
+  ["s", "u16", "UvPCUez", "0PUezUv"],
+  ["i", "u32", "UvPCUez", "0PUezUv"],
+  ["l", "u64", "UvPCUez", "0PUezUv"],
+];
 defvar ZvvmTileLambdas = [1, 2, 4, 8, 16, 32, 64];
 
 // Tile load: the IR intrinsic threads a passthru through arg 0. For the
@@ -517,11 +535,25 @@ let HasMasked = true,
         IRName = "vmttl",
         MaskedIRName = "vmttl_mask" in
       def vmttl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+
+    // Unsigned integer element types (u8/u16/u32/u64): the `Uv` suffix
+    // spells the u-token; the IR intrinsic is the same signless one.
+    let RequiredFeatures = ["experimental-zvvmtls"],
+        Name = "vmtl_v",
+        IRName = "vmtl",
+        MaskedIRName = "vmtl_mask" in
+      def vmtl_v_u : RVVOutOp0Builtin<"Uv", "UvPCUez", "csil">;
+
+    let RequiredFeatures = ["experimental-zvvmttls"],
+        Name = "vmttl_v",
+        IRName = "vmttl",
+        MaskedIRName = "vmttl_mask" in
+      def vmttl_v_u : RVVOutOp0Builtin<"Uv", "UvPCUez", "csil">;
   }
 
   // Per-lambda `_L{N}` override variants: one fully-named def per
   // (type, LMUL, lambda) cell so `_L{N}` lands after the type suffix.
-  foreach tp = ZvvmTileTypePairs in {
+  foreach tp = ZvvmTileTypeCells in {
     foreach l2 = [0, 1, 2, 3] in {
       defvar tsuf = tp[1] # "m" # !shl(1, l2);
       foreach lam = ZvvmTileLambdas in {
@@ -531,14 +563,14 @@ let HasMasked = true,
               OverloadedName = "vmtl_v_" # tsuf # "_L" # lam,
               IRName = "vmtl_l" # lam,
               MaskedIRName = "vmtl_l" # lam # "_mask" in
-            def : RVVOutOp0Builtin<"", "vPCez", tp[0]>;
+            def : RVVOutOp0Builtin<"", tp[2], tp[0]>;
 
           let RequiredFeatures = ["experimental-zvvmttls"],
               Name = "vmttl_v_" # tsuf # "_L" # lam,
               OverloadedName = "vmttl_v_" # tsuf # "_L" # lam,
               IRName = "vmttl_l" # lam,
               MaskedIRName = "vmttl_l" # lam # "_mask" in
-            def : RVVOutOp0Builtin<"", "vPCez", tp[0]>;
+            def : RVVOutOp0Builtin<"", tp[2], tp[0]>;
         }
       }
     }
@@ -581,10 +613,23 @@ let HasMasked = true,
         IRName = "vmtts",
         MaskedIRName = "vmtts_mask" in
       def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+
+    // Unsigned integer element types.
+    let RequiredFeatures = ["experimental-zvvmtls"],
+        Name = "vmts_v",
+        IRName = "vmts",
+        MaskedIRName = "vmts_mask" in
+      def vmts_v_u : RVVBuiltin<"Uv", "0PUezUv", "csil">;
+
+    let RequiredFeatures = ["experimental-zvvmttls"],
+        Name = "vmtts_v",
+        IRName = "vmtts",
+        MaskedIRName = "vmtts_mask" in
+      def vmtts_v_u : RVVBuiltin<"Uv", "0PUezUv", "csil">;
   }
 
   // Per-lambda `_L{N}` override variants for stores.
-  foreach tp = ZvvmTileTypePairs in {
+  foreach tp = ZvvmTileTypeCells in {
     foreach l2 = [0, 1, 2, 3] in {
       defvar tsuf = tp[1] # "m" # !shl(1, l2);
       foreach lam = ZvvmTileLambdas in {
@@ -594,14 +639,207 @@ let HasMasked = true,
               OverloadedName = "vmts_v_" # tsuf # "_L" # lam,
               IRName = "vmts_l" # lam,
               MaskedIRName = "vmts_l" # lam # "_mask" in
-            def : RVVBuiltin<"", "0Pezv", tp[0]>;
+            def : RVVBuiltin<"", tp[3], tp[0]>;
 
           let RequiredFeatures = ["experimental-zvvmttls"],
               Name = "vmtts_v_" # tsuf # "_L" # lam,
               OverloadedName = "vmtts_v_" # tsuf # "_L" # lam,
               IRName = "vmtts_l" # lam,
               MaskedIRName = "vmtts_l" # lam # "_mask" in
-            def : RVVBuiltin<"", "0Pezv", tp[0]>;
+            def : RVVBuiltin<"", tp[3], tp[0]>;
+        }
+      }
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
+// Storage-width-qualified tile load/store: `_as_e{S}` (order-preserving pair
+// only, per spec §"Alternate-format and storage-width-qualified tile
+// load/store intrinsics").
+//
+// The instruction moves S-bit storage elements (vtype.SEW = S); the logical
+// type in the name describes the register-group interpretation only. `ld`
+// and `vl` are counted in S-bit storage elements, the base pointer is
+// `const uint{S}_t *` / `uint{S}_t *` regardless of the logical type, and
+// the transfer is bit-preserving (no numeric conversion). For a masked
+// form, each mask bit controls one S-bit storage element, so the mask ratio
+// is S/LMUL — e.g. `__riscv_vmtl_v_f16m1_as_e32_m` takes vbool32_t.
+//
+// Generated C signatures (f16m1_as_e32 shown):
+//   vfloat16m1_t __riscv_vmtl_v_f16m1_as_e32   (const uint32_t *base,
+//                                               size_t ld, size_t vl);
+//   vfloat16m1_t __riscv_vmtl_v_f16m1_as_e32_m (vbool32_t mask,
+//                                               const uint32_t *base,
+//                                               size_t ld, size_t vl);
+//   void __riscv_vmts_v_f16m1_as_e32 (uint32_t *base, size_t ld,
+//                                     vfloat16m1_t vs3, size_t vl);
+//
+// Implementation: each def is BASED ON THE STORAGE integer type (TypeRange =
+// storage char, Log2LMUL = the tile's register-group size), which makes the
+// auto-generated mask type the spec's S/LMUL ratio and the pointer the
+// storage-width unsigned element pointer for free. The logical vector type
+// is spelled from the storage base via `(FixedSEW:W)` plus the `U`/`F`
+// scalar-kind modifiers (plain `v`/`Uv`/`Fv` when W == S — applyFixedSEW
+// rejects a same-SEW request). Codegen calls the tile intrinsic at the
+// storage container type and reinterprets to/from the logical type with a
+// bit-preserving bitcast (equal register-group size by construction).
+//
+// When S equals the logical type's natural width the `_as_e{S}` form is the
+// spec-mandated alias of the unqualified intrinsic.
+//
+// No `_tu` variants are emitted for `_as_e{S}` (UnMaskedPolicyScheme =
+// NonePolicy): the spec defines none, and tile loads are architecturally
+// always tail/inactive-undisturbed anyway.
+//
+// Non-ISO logical types (bf16, OFP8, OFP4, int4) are deferred with the
+// MX/format phase alongside their vector types.
+//===----------------------------------------------------------------------===//
+
+// Codegen for `_as_e{S}` loads: call the tile-load intrinsic at the S-bit
+// storage container type and bitcast the result to the logical type.
+class ZvvmAsELoadCodegen<string sw> {
+  code Str = [{
+      {
+        const unsigned StorageEW = }] # sw # [{;
+        auto *LogicalTy = cast<llvm::ScalableVectorType>(ResultType);
+        unsigned TotalBits =
+            LogicalTy->getElementType()->getScalarSizeInBits() *
+            LogicalTy->getMinNumElements();
+        auto *StorageTy = llvm::ScalableVectorType::get(
+            llvm::IntegerType::get(getLLVMContext(), StorageEW),
+            TotalBits / StorageEW);
+        if (IsMasked) {
+          // Builtin: (mask, ptr, ld, vl).
+          // Intrinsic: (passthru, ptr, ld, mask, vl, policy).
+          std::rotate(Ops.begin(), Ops.begin() + 1, Ops.end() - 1);
+          Ops.push_back(ConstantInt::get(Ops.back()->getType(), PolicyAttrs));
+          Ops.insert(Ops.begin(), llvm::PoisonValue::get(StorageTy));
+          IntrinsicTypes = {StorageTy, Ops[1]->getType(), Ops[4]->getType()};
+        } else {
+          // Builtin: (ptr, ld, vl). Intrinsic: (passthru, ptr, ld, vl).
+          Ops.insert(Ops.begin(), llvm::PoisonValue::get(StorageTy));
+          IntrinsicTypes = {StorageTy, Ops[1]->getType(), Ops[3]->getType()};
+        }
+        llvm::Value *Load =
+            Builder.CreateCall(CGM.getIntrinsic(ID, IntrinsicTypes), Ops, "");
+        return Builder.CreateBitCast(Load, ResultType);
+      }
+  }];
+}
+
+// Codegen for `_as_e{S}` stores: bitcast the logical value to the S-bit
+// storage container type and call the tile-store intrinsic there.
+class ZvvmAsEStoreCodegen<string sw> {
+  code Str = [{
+      {
+        const unsigned StorageEW = }] # sw # [{;
+        unsigned ValueIdx = IsMasked ? 3 : 2;
+        auto *LogicalTy =
+            cast<llvm::ScalableVectorType>(Ops[ValueIdx]->getType());
+        unsigned TotalBits =
+            LogicalTy->getElementType()->getScalarSizeInBits() *
+            LogicalTy->getMinNumElements();
+        auto *StorageTy = llvm::ScalableVectorType::get(
+            llvm::IntegerType::get(getLLVMContext(), StorageEW),
+            TotalBits / StorageEW);
+        Ops[ValueIdx] = Builder.CreateBitCast(Ops[ValueIdx], StorageTy);
+        if (IsMasked) {
+          // Builtin: (mask, ptr, ld, value, vl).
+          // Intrinsic: (value, ptr, ld, mask, vl).
+          std::swap(Ops[0], Ops[3]);
+          IntrinsicTypes = {StorageTy, Ops[1]->getType(), Ops[4]->getType()};
+        } else {
+          // Builtin: (ptr, ld, value, vl). Intrinsic: (value, ptr, ld, vl).
+          std::rotate(Ops.begin(), Ops.begin() + 2, Ops.begin() + 3);
+          IntrinsicTypes = {StorageTy, Ops[1]->getType(), Ops[3]->getType()};
+        }
+      }
+  }];
+}
+
+// (logical token, logical-vector prototype from the storage base) cells per
+// storage width. `F`/`U` swap the scalar kind at the (FixedSEW-adjusted)
+// element width; natural-width cells omit FixedSEW.
+defvar ZvvmAsECells_e8  = [["i8", "v"], ["u8", "Uv"]];
+defvar ZvvmAsECells_e16 = [["i8",  "(FixedSEW:8)v"],  ["u8",  "(FixedSEW:8)Uv"],
+                           ["i16", "v"],              ["u16", "Uv"],
+                           ["f16", "Fv"]];
+defvar ZvvmAsECells_e32 = [["i8",  "(FixedSEW:8)v"],  ["u8",  "(FixedSEW:8)Uv"],
+                           ["i16", "(FixedSEW:16)v"], ["u16", "(FixedSEW:16)Uv"],
+                           ["f16", "(FixedSEW:16)Fv"],
+                           ["i32", "v"],              ["u32", "Uv"],
+                           ["f32", "Fv"]];
+defvar ZvvmAsECells_e64 = [["i8",  "(FixedSEW:8)v"],  ["u8",  "(FixedSEW:8)Uv"],
+                           ["i16", "(FixedSEW:16)v"], ["u16", "(FixedSEW:16)Uv"],
+                           ["f16", "(FixedSEW:16)Fv"],
+                           ["i32", "(FixedSEW:32)v"], ["u32", "(FixedSEW:32)Uv"],
+                           ["f32", "(FixedSEW:32)Fv"],
+                           ["i64", "v"],              ["u64", "Uv"],
+                           ["f64", "Fv"]];
+
+foreach st = [["c", "8"], ["s", "16"], ["i", "32"], ["l", "64"]] in {
+  defvar cells = !cond(!eq(st[1], "8")  : ZvvmAsECells_e8,
+                       !eq(st[1], "16") : ZvvmAsECells_e16,
+                       !eq(st[1], "32") : ZvvmAsECells_e32,
+                       true             : ZvvmAsECells_e64);
+
+  // Loads.
+  let HasMasked = true,
+      HasMaskedOffOperand = false,
+      MaskedPolicyScheme = NonePolicy,
+      UnMaskedPolicyScheme = NonePolicy,
+      RequiredFeatures = ["experimental-zvvmtls"],
+      ManualCodegen = ZvvmAsELoadCodegen<st[1]>.Str in {
+    foreach l2 = [0, 1, 2, 3] in {
+      defvar lmul = !shl(1, l2);
+      foreach cell = cells in {
+        defvar tsuf = cell[0] # "m" # lmul # "_as_e" # st[1];
+        defvar loadProto = cell[1] # "PCUez";
+        let Log2LMUL = [l2] in {
+          let Name = "vmtl_v_" # tsuf,
+              OverloadedName = "vmtl_v_" # tsuf,
+              IRName = "vmtl",
+              MaskedIRName = "vmtl_mask" in
+            def : RVVBuiltin<"", loadProto, st[0]>;
+
+          foreach lam = ZvvmTileLambdas in {
+            let Name = "vmtl_v_" # tsuf # "_L" # lam,
+                OverloadedName = "vmtl_v_" # tsuf # "_L" # lam,
+                IRName = "vmtl_l" # lam,
+                MaskedIRName = "vmtl_l" # lam # "_mask" in
+              def : RVVBuiltin<"", loadProto, st[0]>;
+          }
+        }
+      }
+    }
+  }
+
+  // Stores.
+  let HasMasked = true,
+      HasMaskedOffOperand = false,
+      MaskedPolicyScheme = NonePolicy,
+      RequiredFeatures = ["experimental-zvvmtls"],
+      ManualCodegen = ZvvmAsEStoreCodegen<st[1]>.Str in {
+    foreach l2 = [0, 1, 2, 3] in {
+      defvar lmul = !shl(1, l2);
+      foreach cell = cells in {
+        defvar tsuf = cell[0] # "m" # lmul # "_as_e" # st[1];
+        defvar storeProto = "0PUez" # cell[1];
+        let Log2LMUL = [l2] in {
+          let Name = "vmts_v_" # tsuf,
+              OverloadedName = "vmts_v_" # tsuf,
+              IRName = "vmts",
+              MaskedIRName = "vmts_mask" in
+            def : RVVBuiltin<"", storeProto, st[0]>;
+
+          foreach lam = ZvvmTileLambdas in {
+            let Name = "vmts_v_" # tsuf # "_L" # lam,
+                OverloadedName = "vmts_v_" # tsuf # "_L" # lam,
+                IRName = "vmts_l" # lam,
+                MaskedIRName = "vmts_l" # lam # "_mask" in
+              def : RVVBuiltin<"", storeProto, st[0]>;
+          }
         }
       }
     }
