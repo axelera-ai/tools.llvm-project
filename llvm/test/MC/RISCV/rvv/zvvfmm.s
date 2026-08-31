@@ -35,3 +35,21 @@ vf8wmmacc.vv v8, v4, v20
 # CHECK-INST: vf8wmmacc.vv v8, v4, v20
 # CHECK-ENCODING: [0x57,0x14,0x42,0x5f]
 # CHECK-UNKNOWN: 5f421457 <unknown>
+
+# vm=0 microscaled forms of the widening FP MACs (trailing v0.scale; the
+# encodings differ from the vm=1 forms above only in bit 25). Gated on the
+# Zvvfmm family flag; the MX encoding-map legality is a vtype-time property.
+vfwmmacc.vv v8, v4, v20, v0.scale
+# CHECK-INST: vfwmmacc.vv v8, v4, v20, v0.scale
+# CHECK-ENCODING: [0x57,0x14,0x42,0x55]
+# CHECK-UNKNOWN: 55421457 <unknown>
+
+vfqmmacc.vv v8, v4, v20, v0.scale
+# CHECK-INST: vfqmmacc.vv v8, v4, v20, v0.scale
+# CHECK-ENCODING: [0x57,0x14,0x42,0x59]
+# CHECK-UNKNOWN: 59421457 <unknown>
+
+vf8wmmacc.vv v8, v4, v20, v0.scale
+# CHECK-INST: vf8wmmacc.vv v8, v4, v20, v0.scale
+# CHECK-ENCODING: [0x57,0x14,0x42,0x5d]
+# CHECK-UNKNOWN: 5d421457 <unknown>

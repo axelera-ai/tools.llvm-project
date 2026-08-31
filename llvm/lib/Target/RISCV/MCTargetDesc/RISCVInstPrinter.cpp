@@ -165,6 +165,21 @@ void RISCVInstPrinter::printFRMArg(const MCInst *MI, unsigned OpNo,
   O << ", " << RISCVFPRndMode::roundingModeToString(FRMArg);
 }
 
+// Zvvm microscaled MAC scale operand: prints ", v0.scale" when the operand
+// is V0 (vm=0). The operand is mandatory on the MX-only mnemonics and never
+// NoRegister there.
+void RISCVInstPrinter::printVScaleReg(const MCInst *MI, unsigned OpNo,
+                                      const MCSubtargetInfo &STI,
+                                      raw_ostream &O) {
+  const MCOperand &MO = MI->getOperand(OpNo);
+  assert(MO.isReg() && "printVScaleReg can only print register operands");
+  if (MO.getReg() == RISCV::NoRegister)
+    return;
+  O << ", ";
+  printRegName(O, MO.getReg());
+  O << ".scale";
+}
+
 void RISCVInstPrinter::printLambdaArg(const MCInst *MI, unsigned OpNo,
                                       const MCSubtargetInfo &STI,
                                       raw_ostream &O) {
