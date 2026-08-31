@@ -1194,6 +1194,10 @@ static bool lowerRISCVVMachineInstrToMCInst(const MachineInstr *MI,
 // register number — the LMUL grouping is established in vtype by a prior
 // vsetvl_matrix. Other register classes (V0, X0, plain VR) pass through.
 static Register baseVRRegister(Register Reg, const TargetRegisterInfo *TRI) {
+  // An IME m16 accumulator tuple (VRN2M8) also encodes only its base VR:
+  // peel the low M8 half first, then fall through to the M8 -> VR case.
+  if (RISCV::VRN2M8RegClass.contains(Reg))
+    Reg = TRI->getSubReg(Reg, RISCV::sub_vrm8_0);
   if (RISCV::VRM2RegClass.contains(Reg) ||
       RISCV::VRM4RegClass.contains(Reg) ||
       RISCV::VRM8RegClass.contains(Reg))

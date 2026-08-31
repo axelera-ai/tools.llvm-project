@@ -55,6 +55,8 @@ class RISCVReg128<RISCVReg64 subreg>
 let FallbackRegAltNameIndex = NoRegAltName in
 def ABIRegAltName : RegAltNameIndex;
 
+def sub_vrm8_0 : SubRegIndex<512>;
+def sub_vrm8_1 : SubRegIndex<512, 512>;
 def sub_vrm4_0 : SubRegIndex<256>;
 def sub_vrm4_1 : SubRegIndex<256, 256>;
 def sub_vrm2_0 : SubRegIndex<128>;
@@ -876,6 +878,18 @@ foreach m = LMULList in {
              m, nf>;
   }
 }
+
+// RISC-V IME (Zvvm) m16 accumulator register groups: pairs of M8 groups.
+// Unlike the Zvlsseg segment tuples above (NF x LMUL <= 8), the IME
+// EMUL_C = 16 accumulator tile is architecturally required to be
+// 16-register aligned, so the class contains exactly the two aligned
+// pairs (v16-v31 first in allocation order to keep v0-v15, which contains
+// the mask register v0, free for as long as possible).
+def VN2M8 : RegisterTuples<[sub_vrm8_0, sub_vrm8_1],
+                           [(add V16M8, V0M8), (add V24M8, V8M8)],
+                           ["v16", "v0"]>;
+defvar VTupM8N2VTs = [riscv_nxv64i8x2];
+def VRN2M8 : VReg<VTupM8N2VTs, (add VN2M8), 8, 2>;
 
 //===----------------------------------------------------------------------===//
 // Special registers

@@ -6025,6 +6025,17 @@ foreach lmul = MxList in {
   }
 }
 
+// Spill/reload for the IME (Zvvm) m16 accumulator tuple (VRN2M8), which
+// lies outside the Zvlsseg NFSet (NF x LMUL <= 8). Lowered by
+// lowerSegmentSpillReload like the segment tuples: two whole-register
+// M8 accesses plus one base-pointer bump (3 instructions).
+let hasSideEffects = 0, mayLoad = 0, mayStore = 1, isCodeGenOnly = 1,
+    Size = 12 in
+def PseudoVSPILL2_M8 : Pseudo<(outs), (ins VRN2M8:$rs1, GPR:$rs2), []>;
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0, isCodeGenOnly = 1,
+    Size = 12 in
+def PseudoVRELOAD2_M8 : Pseudo<(outs VRN2M8:$rs1), (ins GPR:$rs2), []>;
+
 //===----------------------------------------------------------------------===//
 // 6. Configuration-Setting Instructions
 //===----------------------------------------------------------------------===//
