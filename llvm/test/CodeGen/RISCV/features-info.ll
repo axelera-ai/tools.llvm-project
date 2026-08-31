@@ -42,6 +42,41 @@
 ; CHECK-NEXT:   experimental-zvfofp8min          - 'Zvfofp8min' (Vector OFP8 Converts).
 ; CHECK-NEXT:   experimental-zvkgs               - 'Zvkgs' (Vector-Scalar GCM instructions for Cryptography).
 ; CHECK-NEXT:   experimental-zvqdotq             - 'Zvqdotq' (Vector quad widening 4D Dot Product).
+; CHECK-NEXT:   experimental-zvvbf16fp32mm           - 'Zvvbf16fp32mm' (BFloat16 Inputs, FP32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvbf16fp64mm           - 'Zvvbf16fp64mm' (BFloat16 Inputs, FP64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvbf16mm               - 'Zvvbf16mm' (BFloat16 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfmm                  - 'Zvvfmm' (Floating-Point Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfp16fp32mm           - 'Zvvfp16fp32mm' (FP16 Inputs, FP32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfp16fp64mm           - 'Zvvfp16fp64mm' (FP16 Inputs, FP64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfp16mm               - 'Zvvfp16mm' (FP16 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfp32fp64mm           - 'Zvvfp32fp64mm' (FP32 Inputs, FP64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfp32mm               - 'Zvvfp32mm' (FP32 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvfp64mm               - 'Zvvfp64mm' (FP64 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi16i32mm             - 'Zvvi16i32mm' (Int16 Inputs, Int32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi16i64mm             - 'Zvvi16i64mm' (Int16 Inputs, Int64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi16mm                - 'Zvvi16mm' (Int16 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi32i64mm             - 'Zvvi32i64mm' (Int32 Inputs, Int64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi32mm                - 'Zvvi32mm' (Int32 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi4i16mm              - 'Zvvi4i16mm' (Int4 Inputs, Int16 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi4i32mm              - 'Zvvi4i32mm' (Int4 Inputs, Int32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi4i8mm               - 'Zvvi4i8mm' (Int4 Inputs, Int8 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi64mm                - 'Zvvi64mm' (Int64 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi8i16mm              - 'Zvvi8i16mm' (Int8 Inputs, Int16 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi8i32mm              - 'Zvvi8i32mm' (Int8 Inputs, Int32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi8i64mm              - 'Zvvi8i64mm' (Int8 Inputs, Int64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvi8mm                 - 'Zvvi8mm' (Int8 Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvmm                   - 'Zvvmm' (Integer Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvmtls                 - 'Zvvmtls' (Matrix Tile Load/Store).
+; CHECK-NEXT:   experimental-zvvmttls                - 'Zvvmttls' (Transposing Matrix Tile Load/Store).
+; CHECK-NEXT:   experimental-zvvofp4bf16mm           - 'Zvvofp4bf16mm' (OFP4 Inputs, BFloat16 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp4fp16mm           - 'Zvvofp4fp16mm' (OFP4 Inputs, FP16 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp4fp32mm           - 'Zvvofp4fp32mm' (OFP4 Inputs, FP32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp4ofp8mm           - 'Zvvofp4ofp8mm' (OFP4 Inputs, OFP8 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp8bf16mm           - 'Zvvofp8bf16mm' (OFP8 Inputs, BFloat16 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp8fp16mm           - 'Zvvofp8fp16mm' (OFP8 Inputs, FP16 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp8fp32mm           - 'Zvvofp8fp32mm' (OFP8 Inputs, FP32 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp8fp64mm           - 'Zvvofp8fp64mm' (OFP8 Inputs, FP64 Accumulator Matrix Multiply-Accumulate).
+; CHECK-NEXT:   experimental-zvvofp8mm               - 'Zvvofp8mm' (OFP8 Matrix Multiply-Accumulate).
 ; CHECK-NEXT:   f                                - 'F' (Single-Precision Floating-Point).
 ; CHECK-NEXT:   forced-atomics                   - Assume that lock-free native-width atomics are available.
 ; CHECK-NEXT:   h                                - 'H' (Hypervisor).
