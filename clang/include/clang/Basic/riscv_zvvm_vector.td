@@ -15,18 +15,20 @@
 //
 // Current scope:
 //   * vsetvl_matrix — full-vtype write (covers lambda / bs / altfmt_A / altfmt_B).
-//   * vmmacc_vv     — non-widening integer matrix multiply-accumulate, SEW=32
-//                     LMUL=1 only. (Widening variants and broader (SEW, LMUL)
-//                     coverage land in follow-up patches.)
-//   * vfmmacc_vv    — non-widening FP matrix multiply-accumulate, FP32 LMUL=1
-//                     only. (Widening vfwmmacc/vfqmmacc/vf8wmmacc share the
-//                     same EMUL_C ≠ LMUL machinery gap as the integer widening
-//                     variants and land in the same follow-up.)
+//   * vmmacc_vv     — non-widening integer matrix multiply-accumulate, SEW=32,
+//                     EMUL_C × LMUL ∈ {1,2,4,8}². (Widening variants land in
+//                     follow-up patches.)
+//   * vfmmacc_vv    — non-widening FP matrix multiply-accumulate, FP32,
+//                     EMUL_C × LMUL ∈ {1,2,4,8}². (Widening
+//                     vfwmmacc/vfqmmacc/vf8wmmacc share the SEW(A) ≠ SEW(C)
+//                     machinery gap with the integer widening variants and
+//                     land in the same follow-up.)
 //   * vmtl_v / vmts_v   — order-preserving tile load / store (Zvvmtls).
 //   * vmttl_v / vmtts_v — transposing tile load / store (Zvvmttls).
-//     All four cover LMUL=1, default-lambda unmasked, every element type at
-//     i8/i16/i32/i64/f16/f32/f64. (Lambda override _L{N} and masked variants
-//     land in follow-ups.)
+//     All four cover LMUL ∈ {1,2,4,8}, every element type at
+//     i8/i16/i32/i64/f16/f32/f64, in default-lambda and per-instruction
+//     `_L{N}` override forms, unmasked and masked (`_m`, mask-first per the
+//     spec's canonical suffix order {type-suffix}[_L{N}][_m]).
 //
 //===----------------------------------------------------------------------===//
 
@@ -253,13 +255,19 @@ class ABLog2LMULTransformer<int cLog2, int abLog2> {
 // fully qualified at the C-API layer; `OverloadedName` is set equal to
 // `Name` to disable generic-name overload resolution, which would
 // otherwise erase the LMUL distinction.
+//
+// Per the IME spec's canonical suffix order, the `_lm{N}` qualifier is
+// omitted for LMUL=1: the canonical LMUL=1 long-form name is
+// `__riscv_vmmacc_vv_i32m{EMUL_C}` with no qualifier; `_lm2` / `_lm4` /
+// `_lm8` name the LMUL>1 variants.
 foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
   foreach abLog2 = [0, 1, 2, 3] in {  // LMUL   ∈ {1,2,4,8}
     defvar abTfm  = ABLog2LMULTransformer<cLog2, abLog2>.Str;
     defvar emul_c = !shl(1, cLog2);
     defvar lmul   = !shl(1, abLog2);
-    defvar intName = "vmmacc_vv_i32m" # emul_c # "_lm" # lmul;
-    defvar fpName  = "vfmmacc_vv_f32m" # emul_c # "_lm" # lmul;
+    defvar lmSuffix = !if(!eq(abLog2, 0), "", "_lm" # lmul);
+    defvar intName = "vmmacc_vv_i32m" # emul_c # lmSuffix;
+    defvar fpName  = "vfmmacc_vv_f32m" # emul_c # lmSuffix;
 
     let RequiredFeatures = ["experimental-zvvmm"],
         HasMasked = false,
@@ -288,98 +296,186 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 //===----------------------------------------------------------------------===//
 // Zvvmtls / Zvvmttls: tile load and store.
 //
-// Four mnemonics, each at LMUL=1 over TypeRange "csilxfd":
+// Four mnemonics, each over TypeRange "csilxfd" at LMUL ∈ {1,2,4,8}:
 //   vmtl.v  — order-preserving load  (Zvvmtls)
 //   vmts.v  — order-preserving store (Zvvmtls)
 //   vmttl.v — transposing load       (Zvvmttls)
 //   vmtts.v — transposing store      (Zvvmttls)
 //
-// Generated C signatures (one per element type, e.g. i32m1 shown):
-//   vint32m1_t __riscv_vmtl_v_i32m1 (const int32_t *base, size_t ld, size_t vl);
-//   vint32m1_t __riscv_vmttl_v_i32m1(const int32_t *base, size_t ld, size_t vl);
-//   void       __riscv_vmts_v_i32m1 (int32_t *base, size_t ld,
-//                                    vint32m1_t vs3, size_t vl);
-//   void       __riscv_vmtts_v_i32m1(int32_t *base, size_t ld,
-//                                    vint32m1_t vs3, size_t vl);
+// Generated C signatures (i32m1 shown), following the spec's canonical
+// long-form suffix order {type-suffix}[_L{N}][_m]:
+//   vint32m1_t __riscv_vmtl_v_i32m1     (const int32_t *base, size_t ld,
+//                                        size_t vl);
+//   vint32m1_t __riscv_vmtl_v_i32m1_L4  (const int32_t *base, size_t ld,
+//                                        size_t vl);
+//   vint32m1_t __riscv_vmtl_v_i32m1_m   (vbool32_t mask, const int32_t *base,
+//                                        size_t ld, size_t vl);
+//   vint32m1_t __riscv_vmtl_v_i32m1_L4_m(vbool32_t mask, const int32_t *base,
+//                                        size_t ld, size_t vl);
+//   void __riscv_vmts_v_i32m1     (int32_t *base, size_t ld, vint32m1_t vs3,
+//                                  size_t vl);
+//   void __riscv_vmts_v_i32m1_m   (vbool32_t mask, int32_t *base, size_t ld,
+//                                  vint32m1_t vs3, size_t vl);
 //
 // The instruction encoding is element-type-agnostic — SEW lives in vtype —
-// so every LMUL=1 element type maps to the same pseudo with the matching IR
-// overload. Per-instruction lambda override (_L{N} variants) and masked
-// variants are not exposed yet; they land in follow-up patches.
+// so every element type maps to the same pseudo with the matching IR
+// overload. Fractional LMUL is spec-reserved for the IME family. Tile L/S
+// has only one tile, so there's no EMUL_C ≠ LMUL distinction.
+//
+// The default-lambda form (no `_L{N}`) uses vtype.lambda. The `_L{N}`
+// variants request the exact per-instruction Lλ override encoded in the
+// instruction's lambda field; the immediate is checked exactly by hardware
+// (NOT WARL-clamped) and raises illegal-instruction when the requested
+// value is unsupported for the current (VLEN, SEW). The matching IR
+// intrinsics keep their lowercase int_riscv_vmtl_l{1,...,64} spelling.
+//
+// The `_L{N}` spelling must come AFTER the type suffix (spec order), which
+// the emitter's Name+auto-Suffix composition cannot produce, so each
+// (type, LMUL, lambda) cell is emitted as its own fully-named builtin with
+// Suffix="" — the same technique the MAC builtins above use for `_lm{N}`.
+// The masked `_m` qualifier is appended last by the standard masked-name
+// machinery, giving `_i32m1_L4_m`.
+//
+// Masking: tile loads/stores follow the spec's masked form with the mask as
+// the leading argument and no maskedoff operand. Tile loads always leave
+// inactive and tail destination elements undisturbed architecturally, so
+// the policy operand of the masked IR intrinsic only constrains compiler
+// freedom; we pass the TAMA policy bits to keep the poison-passthru
+// convention of the unsuffixed RVV forms.
 //===----------------------------------------------------------------------===//
 
-// Tile load: passthru is poisoned for unmasked builds (standard RVV pattern
-// for tail-undisturbed); the IR intrinsic threads it through arg 0.
-//
-// The default-lambda form (no suffix) uses vtype.lambda. The `_l{N}` variants
-// override vtype.lambda for the duration of the instruction via the per-
-// instruction Lλ field in the encoding; the matching IR intrinsics are
-// int_riscv_vmtl_l{1,2,4,8,16,32,64} and friends.
-//
-// Log2LMUL = [0,1,2,3] expands the C-surface to LMUL ∈ {1,2,4,8}, i.e.
-// `__riscv_vmtl_v_<T>m{1,2,4,8}` (and the same for the `_l{N}` variants).
-// Fractional LMUL is spec-reserved for the IME family. Tile L/S has only
-// one tile, so there's no EMUL_C ≠ LMUL distinction: A/B/C-agnostic loads
-// scale uniformly with vtype.LMUL.
-let HasMasked = false,
+// (TypeRange char, C type token) pairs used to spell explicit names.
+defvar ZvvmTileTypePairs = [["c", "i8"],  ["s", "i16"], ["i", "i32"],
+                            ["l", "i64"], ["x", "f16"], ["f", "f32"],
+                            ["d", "f64"]];
+defvar ZvvmTileLambdas = [1, 2, 4, 8, 16, 32, 64];
+
+// Tile load: the IR intrinsic threads a passthru through arg 0. For the
+// plain (tail-agnostic) form the passthru is poison; the `_tu` policy
+// variant supplies it explicitly; the masked `_m` form (mask, ptr, ld, vl)
+// maps to (poison, ptr, ld, mask, vl, policy).
+let HasMasked = true,
+    HasMaskedOffOperand = false,
+    MaskedPolicyScheme = NonePolicy,
     UnMaskedPolicyScheme = HasPassthruOperand,
-    Log2LMUL = [0, 1, 2, 3] in {
-  let RequiredFeatures = ["experimental-zvvmtls"],
-      Name = "vmtl_v",
-      IRName = "vmtl" in
-    def vmtl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
-
-  let RequiredFeatures = ["experimental-zvvmttls"],
-      Name = "vmttl_v",
-      IRName = "vmttl" in
-    def vmttl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
-
-  // Per-lambda override variants.
-  foreach lsuf = ["_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
+    ManualCodegen = [{
+      {
+        if (IsMasked) {
+          // Builtin: (mask, ptr, ld, vl).
+          // Intrinsic: (passthru, ptr, ld, mask, vl, policy).
+          std::rotate(Ops.begin(), Ops.begin() + 1, Ops.end() - 1);
+          Ops.push_back(ConstantInt::get(Ops.back()->getType(), PolicyAttrs));
+          Ops.insert(Ops.begin(), llvm::PoisonValue::get(ResultType));
+          IntrinsicTypes = {ResultType, Ops[1]->getType(), Ops[4]->getType()};
+        } else {
+          // TA builtin: (ptr, ld, vl); _tu builtin: (passthru, ptr, ld, vl).
+          // Intrinsic: (passthru, ptr, ld, vl).
+          if (Ops.size() == 3)
+            Ops.insert(Ops.begin(), llvm::PoisonValue::get(ResultType));
+          IntrinsicTypes = {ResultType, Ops[1]->getType(), Ops[3]->getType()};
+        }
+      }
+    }] in {
+  // Default-lambda forms: one def per mnemonic, auto type suffix.
+  let Log2LMUL = [0, 1, 2, 3] in {
     let RequiredFeatures = ["experimental-zvvmtls"],
-        Name = "vmtl_v" # lsuf,
-        IRName = "vmtl" # lsuf in
-      def : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+        Name = "vmtl_v",
+        IRName = "vmtl",
+        MaskedIRName = "vmtl_mask" in
+      def vmtl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
-        Name = "vmttl_v" # lsuf,
-        IRName = "vmttl" # lsuf in
-      def : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+        Name = "vmttl_v",
+        IRName = "vmttl",
+        MaskedIRName = "vmttl_mask" in
+      def vmttl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
+  }
+
+  // Per-lambda `_L{N}` override variants: one fully-named def per
+  // (type, LMUL, lambda) cell so `_L{N}` lands after the type suffix.
+  foreach tp = ZvvmTileTypePairs in {
+    foreach l2 = [0, 1, 2, 3] in {
+      defvar tsuf = tp[1] # "m" # !shl(1, l2);
+      foreach lam = ZvvmTileLambdas in {
+        let Log2LMUL = [l2] in {
+          let RequiredFeatures = ["experimental-zvvmtls"],
+              Name = "vmtl_v_" # tsuf # "_L" # lam,
+              OverloadedName = "vmtl_v_" # tsuf # "_L" # lam,
+              IRName = "vmtl_l" # lam,
+              MaskedIRName = "vmtl_l" # lam # "_mask" in
+            def : RVVOutOp0Builtin<"", "vPCez", tp[0]>;
+
+          let RequiredFeatures = ["experimental-zvvmttls"],
+              Name = "vmttl_v_" # tsuf # "_L" # lam,
+              OverloadedName = "vmttl_v_" # tsuf # "_L" # lam,
+              IRName = "vmttl_l" # lam,
+              MaskedIRName = "vmttl_l" # lam # "_mask" in
+            def : RVVOutOp0Builtin<"", "vPCez", tp[0]>;
+        }
+      }
+    }
   }
 }
 
-// Tile store: builtin order is (ptr, ld, vec, vl), IR intrinsic order is
-// (vec, ptr, ld, vl). Rotate to match the IR shape. The rotation is operand-
-// order-only and is LMUL-agnostic; Log2LMUL = [0,1,2,3] exposes the same
-// rotation for every LMUL ∈ {1,2,4,8}.
-let HasMasked = false,
-    Log2LMUL = [0, 1, 2, 3],
+// Tile store: builtin order is (ptr, ld, value, vl) — masked adds the mask
+// in front — while the IR intrinsic order is (value, ptr, ld[, mask], vl).
+// Rearrange to match the IR shape. The rearrangement is operand-order-only
+// and is LMUL-agnostic.
+let HasMasked = true,
+    HasMaskedOffOperand = false,
+    MaskedPolicyScheme = NonePolicy,
     ManualCodegen = [{
-      // Builtin: (ptr, ld, value, vl). Intrinsic: (value, ptr, ld, vl).
-      std::rotate(Ops.begin(), Ops.begin() + 2, Ops.begin() + 3);
-      IntrinsicTypes = {Ops[0]->getType(), Ops[1]->getType(),
-                        Ops[2]->getType()};
+      {
+        if (IsMasked) {
+          // Builtin: (mask, ptr, ld, value, vl).
+          // Intrinsic: (value, ptr, ld, mask, vl).
+          std::swap(Ops[0], Ops[3]);
+          IntrinsicTypes = {Ops[0]->getType(), Ops[1]->getType(),
+                            Ops[4]->getType()};
+        } else {
+          // Builtin: (ptr, ld, value, vl). Intrinsic: (value, ptr, ld, vl).
+          std::rotate(Ops.begin(), Ops.begin() + 2, Ops.begin() + 3);
+          IntrinsicTypes = {Ops[0]->getType(), Ops[1]->getType(),
+                            Ops[3]->getType()};
+        }
+      }
     }] in {
-  let RequiredFeatures = ["experimental-zvvmtls"],
-      Name = "vmts_v",
-      IRName = "vmts" in
-    def vmts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
-
-  let RequiredFeatures = ["experimental-zvvmttls"],
-      Name = "vmtts_v",
-      IRName = "vmtts" in
-    def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
-
-  // Per-lambda override variants for stores.
-  foreach lsuf = ["_l1", "_l2", "_l4", "_l8", "_l16", "_l32", "_l64"] in {
+  // Default-lambda forms.
+  let Log2LMUL = [0, 1, 2, 3] in {
     let RequiredFeatures = ["experimental-zvvmtls"],
-        Name = "vmts_v" # lsuf,
-        IRName = "vmts" # lsuf in
-      def : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+        Name = "vmts_v",
+        IRName = "vmts",
+        MaskedIRName = "vmts_mask" in
+      def vmts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
-        Name = "vmtts_v" # lsuf,
-        IRName = "vmtts" # lsuf in
-      def : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+        Name = "vmtts_v",
+        IRName = "vmtts",
+        MaskedIRName = "vmtts_mask" in
+      def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+  }
+
+  // Per-lambda `_L{N}` override variants for stores.
+  foreach tp = ZvvmTileTypePairs in {
+    foreach l2 = [0, 1, 2, 3] in {
+      defvar tsuf = tp[1] # "m" # !shl(1, l2);
+      foreach lam = ZvvmTileLambdas in {
+        let Log2LMUL = [l2] in {
+          let RequiredFeatures = ["experimental-zvvmtls"],
+              Name = "vmts_v_" # tsuf # "_L" # lam,
+              OverloadedName = "vmts_v_" # tsuf # "_L" # lam,
+              IRName = "vmts_l" # lam,
+              MaskedIRName = "vmts_l" # lam # "_mask" in
+            def : RVVBuiltin<"", "0Pezv", tp[0]>;
+
+          let RequiredFeatures = ["experimental-zvvmttls"],
+              Name = "vmtts_v_" # tsuf # "_L" # lam,
+              OverloadedName = "vmtts_v_" # tsuf # "_L" # lam,
+              IRName = "vmtts_l" # lam,
+              MaskedIRName = "vmtts_l" # lam # "_mask" in
+            def : RVVBuiltin<"", "0Pezv", tp[0]>;
+        }
+      }
+    }
   }
 }

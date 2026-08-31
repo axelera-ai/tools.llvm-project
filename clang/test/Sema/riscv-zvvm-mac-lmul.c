@@ -4,14 +4,16 @@
 
 // Verify the (EMUL_C, LMUL) MAC C-surface: distinct builtins per cell, with
 // per-operand types pinned to the LMUL suffix in the name. Wrong-LMUL inputs
-// must diagnose; no _lm16 / non-power-of-two suffix exists.
+// must diagnose; no _lm16 / non-power-of-two suffix exists. Per the IME
+// spec's canonical suffix order the LMUL=1 name carries no qualifier — an
+// explicit _lm1 spelling does not exist.
 
 #pragma clang riscv intrinsic zvvm_vector
 
 #include <riscv_vector.h>
 
-vint32m1_t ok_m1_lm1(vint32m1_t vd, vint32m1_t vs1, vint32m1_t vs2, size_t vl) {
-  return __riscv_vmmacc_vv_i32m1_lm1(vd, vs1, vs2, vl); // ok
+vint32m1_t ok_m1(vint32m1_t vd, vint32m1_t vs1, vint32m1_t vs2, size_t vl) {
+  return __riscv_vmmacc_vv_i32m1(vd, vs1, vs2, vl); // ok
 }
 
 vint32m1_t ok_m1_lm2(vint32m1_t vd, vint32m2_t vs1, vint32m2_t vs2, size_t vl) {
@@ -49,5 +51,13 @@ vint32m1_t no_lm3(vint32m1_t vd, vint32m1_t vs1, vint32m1_t vs2, size_t vl) {
   // Non-power-of-two LMUL suffix does not exist.
   return __riscv_vmmacc_vv_i32m1_lm3(vd, vs1, vs2, vl);
   // expected-error@-1 {{call to undeclared function '__riscv_vmmacc_vv_i32m1_lm3'}}
+  // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
+}
+
+vint32m1_t no_lm1(vint32m1_t vd, vint32m1_t vs1, vint32m1_t vs2, size_t vl) {
+  // The LMUL=1 form is the unqualified name; an explicit _lm1 spelling is
+  // not provided (spec: the _lm1 qualifier is omitted).
+  return __riscv_vmmacc_vv_i32m1_lm1(vd, vs1, vs2, vl);
+  // expected-error@-1 {{call to undeclared function '__riscv_vmmacc_vv_i32m1_lm1'}}
   // expected-error@-2 {{returning 'int' from a function with incompatible result type}}
 }

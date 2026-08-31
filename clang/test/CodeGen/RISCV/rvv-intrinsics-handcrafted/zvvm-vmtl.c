@@ -108,11 +108,11 @@ vint32m8_t test_vmtl_v_i32m8(const int32_t *base, size_t ld, size_t vl) {
   return __riscv_vmtl_v_i32m8(base, ld, vl);
 }
 
-// CHECK-LABEL: define dso_local <vscale x 8 x float> @test_vmtl_v_l4_f32m4
+// CHECK-LABEL: define dso_local <vscale x 8 x float> @test_vmtl_v_f32m4_L4
 // CHECK-SAME:    (ptr noundef readonly captures(none) [[BASE:%.*]], i64 noundef [[LD:%.*]], i64 noundef [[VL:%.*]]) {{.*}} {
 // CHECK:         [[TMP0:%.*]] = tail call <vscale x 8 x float> @llvm.riscv.vmtl.l4.nxv8f32.p0.i64(<vscale x 8 x float> poison, ptr [[BASE]], i64 [[LD]], i64 [[VL]])
 // CHECK-NEXT:    ret <vscale x 8 x float> [[TMP0]]
 //
-vfloat32m4_t test_vmtl_v_l4_f32m4(const float *base, size_t ld, size_t vl) {
-  return __riscv_vmtl_v_l4_f32m4(base, ld, vl);
+vfloat32m4_t test_vmtl_v_f32m4_L4(const float *base, size_t ld, size_t vl) {
+  return __riscv_vmtl_v_f32m4_L4(base, ld, vl);
 }
