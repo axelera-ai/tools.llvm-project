@@ -1,10 +1,10 @@
 ; RUN: sed 's/iXLen/i32/g' %s \
 ; RUN:   | llc -mtriple=riscv32 \
-; RUN:        -mattr=+v,+zvfh,+zve64d,+experimental-zvvfmm \
+; RUN:        -mattr=+v,+zvfh,+zve64d,+experimental-zvvofp8mm,+experimental-zvvfp16mm,+experimental-zvvfp32mm,+experimental-zvvfp64mm,+experimental-zvvofp8fp16mm,+experimental-zvvfp16fp32mm,+experimental-zvvfp32fp64mm,+experimental-zvvofp8fp32mm,+experimental-zvvfp16fp64mm,+experimental-zvvofp8fp64mm \
 ; RUN:        -verify-machineinstrs | FileCheck %s
 ; RUN: sed 's/iXLen/i64/g' %s \
 ; RUN:   | llc -mtriple=riscv64 \
-; RUN:        -mattr=+v,+zvfh,+zve64d,+experimental-zvvfmm \
+; RUN:        -mattr=+v,+zvfh,+zve64d,+experimental-zvvofp8mm,+experimental-zvvfp16mm,+experimental-zvvfp32mm,+experimental-zvvfp64mm,+experimental-zvvofp8fp16mm,+experimental-zvvfp16fp32mm,+experimental-zvvfp32fp64mm,+experimental-zvvofp8fp32mm,+experimental-zvvfp16fp64mm,+experimental-zvvofp8fp64mm \
 ; RUN:        -verify-machineinstrs | FileCheck %s
 
 ; Zvvfmm floating-point matrix multiply-accumulate intrinsics.

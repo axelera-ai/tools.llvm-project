@@ -1,6 +1,6 @@
-; RUN: sed 's/iXLen/i32/g' %s | llc -mtriple=riscv32 -mattr=+v,+experimental-zvvmm \
+; RUN: sed 's/iXLen/i32/g' %s | llc -mtriple=riscv32 -mattr=+v,+experimental-zvvi8mm,+experimental-zvvi16mm,+experimental-zvvi32mm,+experimental-zvvi64mm,+experimental-zvvi8i16mm,+experimental-zvvi16i32mm,+experimental-zvvi32i64mm,+experimental-zvvi8i32mm,+experimental-zvvi16i64mm,+experimental-zvvi8i64mm \
 ; RUN:   -verify-machineinstrs | FileCheck %s
-; RUN: sed 's/iXLen/i64/g' %s | llc -mtriple=riscv64 -mattr=+v,+experimental-zvvmm \
+; RUN: sed 's/iXLen/i64/g' %s | llc -mtriple=riscv64 -mattr=+v,+experimental-zvvi8mm,+experimental-zvvi16mm,+experimental-zvvi32mm,+experimental-zvvi64mm,+experimental-zvvi8i16mm,+experimental-zvvi16i32mm,+experimental-zvvi32i64mm,+experimental-zvvi8i32mm,+experimental-zvvi16i64mm,+experimental-zvvi8i64mm \
 ; RUN:   -verify-machineinstrs | FileCheck %s
 
 ; Zvvmm integer matrix multiply-accumulate intrinsics.

@@ -1,5 +1,5 @@
 ; RUN: sed 's/iXLen/i64/g' %s | llc -mtriple=riscv64 \
-; RUN:   -mattr=+v,+experimental-zvvmm,+experimental-zvvmtls \
+; RUN:   -mattr=+v,+experimental-zvvi32mm,+experimental-zvvmtls \
 ; RUN:   -verify-machineinstrs | FileCheck %s
 
 ; Mixed Zvvm matrix + standard RVV: verifies that the InsertVSETVLI pass
