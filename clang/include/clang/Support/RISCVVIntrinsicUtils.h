@@ -72,6 +72,12 @@ enum class VectorTypeModifier : uint8_t {
   Tuple6,
   Tuple7,
   Tuple8,
+  // Zvvm/IME: the paired E8M0 block-scale register operand of the
+  // microscaled MAC intrinsics — always vuint16m1_t regardless of the
+  // operand's base type. Combines a SEW change, an LMUL change, and a
+  // scalar-kind change, which no composition of the single-axis
+  // transformers above can express (one vector-type modifier per operand).
+  ScalePairU16M1,
 };
 
 // Similar to basic type but used to describe what's kind of type related to
@@ -320,6 +326,11 @@ public:
   bool isConstant() const { return IsConstant; }
   bool isPointer() const { return IsPointer; }
   bool isTuple() const { return IsTuple; }
+  /// The IME (Zvvm) m16 accumulator: a pair of M8 groups (NF=2, LMUL=8),
+  /// outside the Zvlsseg NF x LMUL <= 8 domain and spelled v<elt>m16_t.
+  bool isIMEM16() const {
+    return IsTuple && NF == 2 && LMUL.Log2LMUL == 3;
+  }
   unsigned getElementBitwidth() const { return ElementBitwidth; }
 
   ScalarTypeKind getScalarType() const { return ScalarType; }

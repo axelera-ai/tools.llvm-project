@@ -339,6 +339,10 @@ def riscv_nxv16i8x2  : VTVecTup<256, 2, i8>; // RISCV vector tuple(min_num_elts=
 def riscv_nxv16i8x3  : VTVecTup<384, 3, i8>; // RISCV vector tuple(min_num_elts=16, nf=3)
 def riscv_nxv16i8x4  : VTVecTup<512, 4, i8>; // RISCV vector tuple(min_num_elts=16, nf=4)
 def riscv_nxv32i8x2  : VTVecTup<512, 2, i8>; // RISCV vector tuple(min_num_elts=32, nf=2)
+// NF=2 x LMUL=8 exceeds the Zvlsseg NF*LMUL <= 8 limit and is not a segment
+// type; it exists solely for the RISC-V IME (Zvvm) m16 accumulator register
+// group (EMUL_C = 16), which occupies a 16-register-aligned pair of M8 groups.
+def riscv_nxv64i8x2  : VTVecTup<1024, 2, i8>; // RISCV vector tuple(min_num_elts=64, nf=2)
 
 def x86mmx    : ValueType<64>;           // X86 MMX value
 def Glue      : ValueType<0>;            // Pre-RA sched glue

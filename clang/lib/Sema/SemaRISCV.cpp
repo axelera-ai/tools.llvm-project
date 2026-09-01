@@ -78,6 +78,12 @@ static const PrototypeDescriptor RVAndesVectorSignatureTable[] = {
 #undef DECL_SIGNATURE_TABLE
 };
 
+static const PrototypeDescriptor RVZvvmVectorSignatureTable[] = {
+#define DECL_SIGNATURE_TABLE
+#include "clang/Basic/riscv_zvvm_vector_builtin_sema.inc"
+#undef DECL_SIGNATURE_TABLE
+};
+
 static const RVVIntrinsicRecord RVVIntrinsicRecords[] = {
 #define DECL_INTRINSIC_RECORDS
 #include "clang/Basic/riscv_vector_builtin_sema.inc"
@@ -96,6 +102,12 @@ static const RVVIntrinsicRecord RVAndesVectorIntrinsicRecords[] = {
 #undef DECL_INTRINSIC_RECORDS
 };
 
+static const RVVIntrinsicRecord RVZvvmVectorIntrinsicRecords[] = {
+#define DECL_INTRINSIC_RECORDS
+#include "clang/Basic/riscv_zvvm_vector_builtin_sema.inc"
+#undef DECL_INTRINSIC_RECORDS
+};
+
 // Get subsequence of signature table.
 static ArrayRef<PrototypeDescriptor>
 ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
@@ -106,6 +118,8 @@ ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
     return ArrayRef(&RVSiFiveVectorSignatureTable[Index], Length);
   case IntrinsicKind::ANDES_VECTOR:
     return ArrayRef(&RVAndesVectorSignatureTable[Index], Length);
+  case IntrinsicKind::ZVVM_VECTOR:
+    return ArrayRef(&RVZvvmVectorSignatureTable[Index], Length);
   }
   llvm_unreachable("Unhandled IntrinsicKind");
 }
@@ -188,6 +202,7 @@ private:
   bool ConstructedRISCVVBuiltins;
   bool ConstructedRISCVSiFiveVectorBuiltins;
   bool ConstructedRISCVAndesVectorBuiltins;
+  bool ConstructedRISCVZvvmVectorBuiltins;
 
   // List of all RVV intrinsic.
   std::vector<RVVIntrinsicDef> IntrinsicList;
@@ -214,6 +229,7 @@ public:
     ConstructedRISCVVBuiltins = false;
     ConstructedRISCVSiFiveVectorBuiltins = false;
     ConstructedRISCVAndesVectorBuiltins = false;
+    ConstructedRISCVZvvmVectorBuiltins = false;
   }
 
   // Initialize IntrinsicList
@@ -356,6 +372,12 @@ void RISCVIntrinsicManagerImpl::InitIntrinsicList() {
     ConstructedRISCVAndesVectorBuiltins = true;
     ConstructRVVIntrinsics(RVAndesVectorIntrinsicRecords,
                            IntrinsicKind::ANDES_VECTOR);
+  }
+  if (S.RISCV().DeclareZvvmVectorBuiltins &&
+      !ConstructedRISCVZvvmVectorBuiltins) {
+    ConstructedRISCVZvvmVectorBuiltins = true;
+    ConstructRVVIntrinsics(RVZvvmVectorIntrinsicRecords,
+                           IntrinsicKind::ZVVM_VECTOR);
   }
 }
 
@@ -674,6 +696,25 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
   case RISCVVector::BI__builtin_rvv_sf_vsettk:
     return SemaRef.BuiltinConstantArgRange(TheCall, 1, 0, 3) ||
            SemaRef.BuiltinConstantArgRange(TheCall, 2, 1, 3);
+  case RISCVVector::BI__builtin_rvv_vsetlambda: {
+    // Spec: requested_lambda is a semantic lambda value in
+    // {0, 1, 2, 4, 8, 16, 32, 64}. 0 is the preserve-or-initialize request.
+    // A runtime (non-constant) argument is accepted; supplying an
+    // out-of-domain value at runtime is undefined behavior. A compile-time
+    // out-of-domain value is diagnosed here.
+    Expr *Arg = TheCall->getArg(0);
+    if (Arg->isTypeDependent() || Arg->isValueDependent())
+      return false;
+    std::optional<llvm::APSInt> Result =
+        Arg->getIntegerConstantExpr(SemaRef.Context);
+    if (!Result)
+      return false;
+    int64_t L = Result->getSExtValue();
+    if (L < 0 || L > 64 || (L != 0 && !llvm::isPowerOf2_64(L)))
+      return Diag(Arg->getBeginLoc(), diag::err_riscv_builtin_invalid_lambda)
+             << Arg->getSourceRange();
+    return false;
+  }
   case RISCVVector::BI__builtin_rvv_sf_mm_f_f_w1:
   case RISCVVector::BI__builtin_rvv_sf_mm_f_f_w2:
   case RISCVVector::BI__builtin_rvv_sf_mm_e5m2_e4m3_w4:

@@ -114,7 +114,10 @@ bool RVVType::verifyType() const {
     return false;
   if (IsTuple && (NF == 1 || NF > 8))
     return false;
-  if (IsTuple && (1 << std::max(0, LMUL.Log2LMUL)) * NF > 8)
+  // Zvlsseg segment tuples require NF x LMUL <= 8. The single exception is
+  // the IME (Zvvm) m16 accumulator: a pair of M8 groups (NF=2, LMUL=8),
+  // spelled v<elt>m16_t rather than the segment-style m8x2 (see isIMEM16()).
+  if (IsTuple && (1 << std::max(0, LMUL.Log2LMUL)) * NF > 8 && !isIMEM16())
     return false;
   unsigned V = *Scale;
   switch (ElementBitwidth) {
@@ -257,8 +260,10 @@ void RVVType::initClangBuiltinStr() {
   default:
     llvm_unreachable("ScalarTypeKind is invalid");
   }
-  ClangBuiltinStr += utostr(ElementBitwidth) + LMUL.str() +
-                     (IsTuple ? "x" + utostr(NF) : "") + "_t";
+  ClangBuiltinStr += utostr(ElementBitwidth) +
+                     (isIMEM16() ? "m16"
+                                 : LMUL.str() + (IsTuple ? "x" + utostr(NF) : "")) +
+                     "_t";
 }
 
 void RVVType::initTypeStr() {
@@ -270,8 +275,10 @@ void RVVType::initTypeStr() {
   auto getTypeString = [&](StringRef TypeStr) {
     if (isScalar())
       return Twine(TypeStr + Twine(ElementBitwidth) + "_t").str();
-    return Twine("v" + TypeStr + Twine(ElementBitwidth) + LMUL.str() +
-                 (IsTuple ? "x" + utostr(NF) : "") + "_t")
+    return Twine("v" + TypeStr + Twine(ElementBitwidth) +
+                 (isIMEM16() ? "m16"
+                             : LMUL.str() + (IsTuple ? "x" + utostr(NF) : "")) +
+                 "_t")
         .str();
   };
 
@@ -364,6 +371,10 @@ void RVVType::initShortStr() {
     break;
   default:
     llvm_unreachable("Unhandled case!");
+  }
+  if (isIMEM16()) {
+    ShortStr += "m16";
+    return;
   }
   if (isVector())
     ShortStr += LMUL.str();
@@ -542,6 +553,13 @@ PrototypeDescriptor::parsePrototypeDescriptor(
         llvm_unreachable("Invalid FixedSEW value, should be 8, 16, 32 or 64");
         return std::nullopt;
       }
+    } else if (ComplexTT.first == "ScalePair") {
+      uint32_t PairWidth;
+      if (ComplexTT.second.getAsInteger(10, PairWidth) || PairWidth != 16) {
+        llvm_unreachable("Invalid ScalePair value, must be 16 (E8M0 pairs)");
+        return std::nullopt;
+      }
+      VTM = VectorTypeModifier::ScalePairU16M1;
     } else if (ComplexTT.first == "LFixedLog2LMUL") {
       int32_t Log2LMUL;
       if (ComplexTT.second.getAsInteger(10, Log2LMUL)) {
@@ -778,6 +796,14 @@ void RVVType::applyModifier(const PrototypeDescriptor &Transformer) {
     break;
   case VectorTypeModifier::FixedSEW64:
     applyFixedSEW(64);
+    break;
+  case VectorTypeModifier::ScalePairU16M1:
+    // Zvvm/IME paired E8M0 block scales: one m1 register of unsigned 16-bit
+    // (scale_A, scale_B) pairs, independent of the operand's base type.
+    ElementBitwidth = 16;
+    ScalarType = ScalarTypeKind::UnsignedInteger;
+    LMUL = LMULType(0);
+    Scale = LMUL.getScale(ElementBitwidth);
     break;
   case VectorTypeModifier::LFixedLog2LMULN3:
     applyFixedLog2LMUL(-3, FixedLMULType::LargerThan);

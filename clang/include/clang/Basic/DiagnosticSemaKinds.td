@@ -13285,6 +13285,9 @@ def err_riscv_attribute_interrupt_requires_extension : Error<
 def err_riscv_attribute_interrupt_invalid_combination : Error<
   "RISC-V 'interrupt' attribute contains invalid combination of interrupt types">;
 def err_riscv_builtin_invalid_twiden : Error<"RISC-V XSfmm twiden must be 1, 2 or 4">;
+def err_riscv_builtin_invalid_lambda : Error<
+  "lambda argument must be 0 (preserve-or-initialize) or one of 1, 2, 4, 8, "
+  "16, 32, 64">;
 
 def err_std_source_location_impl_not_found : Error<
   "'std::source_location::__impl' was not found; it must be defined before '__builtin_source_location' is called">;

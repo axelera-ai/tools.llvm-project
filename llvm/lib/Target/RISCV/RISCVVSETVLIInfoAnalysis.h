@@ -51,17 +51,31 @@ struct DemandedFields {
   bool VILL = false;
   bool TWiden = false;
   bool AltFmt = false;
+  // Zvvm matrix vtype fields (lambda / bs / altfmt_A / altfmt_B). Demanded by
+  // the matrix multiply-accumulate and tile load/store pseudos.
+  bool Lambda = false;
+  bool Bs = false;
+  bool AltFmtA = false;
+  bool AltFmtB = false;
 
   // Return true if any part of VTYPE was used
   bool usedVTYPE() const {
     return SEW || LMUL || SEWLMULRatio || TailPolicy || MaskPolicy || VILL ||
-           TWiden || AltFmt;
+           TWiden || AltFmt || Lambda || Bs || AltFmtA || AltFmtB;
   }
 
   // Return true if any property of VL was used
   bool usedVL() { return VLAny || VLZeroness; }
 
-  // Mark all VTYPE subfields and properties as demanded
+  // Mark all VTYPE subfields and properties as demanded.
+  //
+  // The Zvvm matrix vtype fields (lambda / bs / altfmt_A / altfmt_B) are NOT
+  // included here. They are background state: any value is acceptable to a
+  // given vector op, and we never want needVSETVLI to fire just because the
+  // matrix bits differ from the per-instruction computeInfoForInstr default
+  // of 0. Preservation across an inserted vsetvli is handled at emission
+  // time by routing through PseudoVSETVL_MATRIX whenever
+  // VSETVLIInfo::hasMatrixState() is true.
   void demandVTYPE() {
     SEW = SEWEqual;
     LMUL = LMULEqual;
@@ -98,6 +112,10 @@ struct DemandedFields {
     VILL |= B.VILL;
     AltFmt |= B.AltFmt;
     TWiden |= B.TWiden;
+    Lambda |= B.Lambda;
+    Bs |= B.Bs;
+    AltFmtA |= B.AltFmtA;
+    AltFmtB |= B.AltFmtB;
   }
 
 #if !defined(NDEBUG) || defined(LLVM_ENABLE_DUMP)
@@ -146,7 +164,11 @@ struct DemandedFields {
     OS << "MaskPolicy=" << MaskPolicy << ", ";
     OS << "VILL=" << VILL << ", ";
     OS << "AltFmt=" << AltFmt << ", ";
-    OS << "TWiden=" << TWiden;
+    OS << "TWiden=" << TWiden << ", ";
+    OS << "Lambda=" << Lambda << ", ";
+    OS << "Bs=" << Bs << ", ";
+    OS << "AltFmtA=" << AltFmtA << ", ";
+    OS << "AltFmtB=" << AltFmtB;
     OS << "}";
   }
 #endif
@@ -196,11 +218,23 @@ class VSETVLIInfo {
   uint8_t SEWLMULRatioOnly : 1;
   uint8_t AltFmt : 1;
   uint8_t TWiden : 3;
+  // Zvvm matrix vtype fields (high end of vtype CSR). Only the register-form
+  // `vsetvl` can write them directly; a vsetvli / vsetivli retains bs /
+  // altfmt_A / altfmt_B verbatim but may replace lambda when SEW changes
+  // (WARL re-canonicalization against the new (VLEN, SEW); support never
+  // depends on LMUL). Lambda is tracked as the *last requested* encoding;
+  // 0 means no specific value is known or requested — emitting lambda bits
+  // of 000 requests the IME preserve-or-initialize behavior.
+  uint8_t Lambda : 3;
+  uint8_t Bs : 1;
+  uint8_t AltFmtA : 1;
+  uint8_t AltFmtB : 1;
 
 public:
   VSETVLIInfo()
       : AVLImm(0), TailAgnostic(false), MaskAgnostic(false),
-        SEWLMULRatioOnly(false), AltFmt(false), TWiden(0) {}
+        SEWLMULRatioOnly(false), AltFmt(false), TWiden(0),
+        Lambda(0), Bs(0), AltFmtA(0), AltFmtB(0) {}
 
   static VSETVLIInfo getUnknown() {
     VSETVLIInfo Info;
@@ -300,6 +334,33 @@ public:
            "Can't use VTYPE for uninitialized or unknown");
     return TWiden;
   }
+  unsigned getLambda() const {
+    assert(isValid() && !isUnknown() &&
+           "Can't use VTYPE for uninitialized or unknown");
+    return Lambda;
+  }
+  bool getBs() const {
+    assert(isValid() && !isUnknown() &&
+           "Can't use VTYPE for uninitialized or unknown");
+    return Bs;
+  }
+  bool getAltFmtA() const {
+    assert(isValid() && !isUnknown() &&
+           "Can't use VTYPE for uninitialized or unknown");
+    return AltFmtA;
+  }
+  bool getAltFmtB() const {
+    assert(isValid() && !isUnknown() &&
+           "Can't use VTYPE for uninitialized or unknown");
+    return AltFmtB;
+  }
+  /// True iff any of the Zvvm matrix vtype fields differ from their "default"
+  /// (zero) value. When this is true and a vtype write is needed, the writer
+  /// must use the register-form `vsetvl` so the matrix fields are preserved.
+  bool hasMatrixState() const {
+    return isValid() && !isUnknown() && !SEWLMULRatioOnly &&
+           (Lambda || Bs || AltFmtA || AltFmtB);
+  }
 
   bool hasNonZeroAVL(const LiveIntervals *LIS) const {
     if (hasAVLImm())
@@ -364,6 +425,34 @@ public:
     AltFmt = RISCVVType::isAltFmt(VType);
     TWiden =
         RISCVVType::hasXSfmmWiden(VType) ? RISCVVType::getXSfmmWiden(VType) : 0;
+    // The Zvvm matrix fields (lambda / bs / altfmt_A / altfmt_B) sit outside
+    // the 11-bit immediate of vsetvli / vsetivli and are not encoded in
+    // `VType` here; leave them at their current value. Per the IME spec,
+    // hardware retains bs / altfmt_A / altfmt_B verbatim across a vsetvli /
+    // vsetivli, and preserves lambda when it is still supported for the
+    // resulting (VLEN, SEW) — re-canonicalizing it to the largest supported
+    // value otherwise (support never depends on LMUL, so LMUL-only changes
+    // never alter lambda). Callers modeling a vtype write that may change
+    // SEW must therefore treat lambda as may-DEF'd; see
+    // RISCVInsertVSETVLI::transferBefore / transferAfter. Full-vtype writes
+    // (register-form vsetvl) go through setMatrixVTYPE instead.
+  }
+  // Extract all vtype fields (including the Zvvm matrix fields at the high
+  // end) from a full XLen-wide vtype constant — used when interpreting a
+  // PseudoVSETVL_MATRIX immediate operand. XLen is the host XLEN (32 or 64).
+  void setMatrixVTYPE(uint64_t VType, unsigned XLen) {
+    assert(isValid() && !isUnknown() &&
+           "Can't set VTYPE for uninitialized or unknown");
+    VLMul = RISCVVType::getVLMUL(static_cast<unsigned>(VType));
+    SEW = RISCVVType::getSEW(static_cast<unsigned>(VType));
+    TailAgnostic = RISCVVType::isTailAgnostic(static_cast<unsigned>(VType));
+    MaskAgnostic = RISCVVType::isMaskAgnostic(static_cast<unsigned>(VType));
+    AltFmt = RISCVVType::isAltFmt(static_cast<unsigned>(VType));
+    TWiden = 0;
+    AltFmtB = (VType >> (XLen - 7)) & 0x1;
+    AltFmtA = (VType >> (XLen - 6)) & 0x1;
+    Bs      = (VType >> (XLen - 5)) & 0x1;
+    Lambda  = (VType >> (XLen - 4)) & 0x7;
   }
   void setVTYPE(RISCVVType::VLMUL L, unsigned S, bool TA, bool MA, bool Altfmt,
                 unsigned W) {
@@ -375,6 +464,19 @@ public:
     MaskAgnostic = MA;
     AltFmt = Altfmt;
     TWiden = W;
+    // NOTE: this field-by-field setter does NOT touch the Zvvm matrix fields,
+    // so transferBefore can call it followed by setMatrixFields() to thread
+    // matrix state through demand-driven updates. Callers wanting a clean
+    // standard-only vtype should call setMatrixFields(0, 0, 0, 0) afterwards.
+  }
+
+  void setMatrixFields(unsigned L, bool BsArg, bool AltA, bool AltB) {
+    assert(isValid() && !isUnknown() &&
+           "Can't set matrix fields for uninitialized or unknown");
+    Lambda = L & 0x7;
+    Bs = BsArg;
+    AltFmtA = AltA;
+    AltFmtB = AltB;
   }
 
   void setAltFmt(bool AF) { AltFmt = AF; }
@@ -389,6 +491,19 @@ public:
     return RISCVVType::encodeVTYPE(VLMul, SEW, TailAgnostic, MaskAgnostic,
                                    AltFmt);
   }
+  // Encode the full vtype (standard fields + Zvvm matrix fields). Used when
+  // emitting a register-form `vsetvl` that must preserve matrix state. XLen
+  // is the host XLEN (32 or 64).
+  uint64_t encodeMatrixVTYPE(unsigned XLen) const {
+    assert(isValid() && !isUnknown() && !SEWLMULRatioOnly &&
+           "Can't encode VTYPE for uninitialized or unknown");
+    uint64_t V = encodeVTYPE();
+    V |= static_cast<uint64_t>(AltFmtB) << (XLen - 7);
+    V |= static_cast<uint64_t>(AltFmtA) << (XLen - 6);
+    V |= static_cast<uint64_t>(Bs)      << (XLen - 5);
+    V |= static_cast<uint64_t>(Lambda)  << (XLen - 4);
+    return V;
+  }
 
   bool hasSameVTYPE(const VSETVLIInfo &Other) const {
     assert(isValid() && Other.isValid() &&
@@ -397,9 +512,11 @@ public:
            "Can't compare VTYPE in unknown state");
     assert(!SEWLMULRatioOnly && !Other.SEWLMULRatioOnly &&
            "Can't compare when only LMUL/SEW ratio is valid.");
-    return std::tie(VLMul, SEW, TailAgnostic, MaskAgnostic, AltFmt, TWiden) ==
+    return std::tie(VLMul, SEW, TailAgnostic, MaskAgnostic, AltFmt, TWiden,
+                    Lambda, Bs, AltFmtA, AltFmtB) ==
            std::tie(Other.VLMul, Other.SEW, Other.TailAgnostic,
-                    Other.MaskAgnostic, Other.AltFmt, Other.TWiden);
+                    Other.MaskAgnostic, Other.AltFmt, Other.TWiden,
+                    Other.Lambda, Other.Bs, Other.AltFmtA, Other.AltFmtB);
   }
 
   unsigned getSEWLMULRatio() const {
@@ -552,7 +669,11 @@ public:
          << "MaskAgnostic=" << (bool)MaskAgnostic << ", "
          << "SEWLMULRatioOnly=" << (bool)SEWLMULRatioOnly << ", "
          << "TWiden=" << (unsigned)TWiden << ", "
-         << "AltFmt=" << (bool)AltFmt;
+         << "AltFmt=" << (bool)AltFmt << ", "
+         << "Lambda=" << (unsigned)Lambda << ", "
+         << "Bs=" << (bool)Bs << ", "
+         << "AltFmtA=" << (bool)AltFmtA << ", "
+         << "AltFmtB=" << (bool)AltFmtB;
     }
 
     OS << '}';

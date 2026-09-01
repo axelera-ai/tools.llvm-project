@@ -179,6 +179,57 @@ void RISCVInsertVSETVLI::insertVSETVLI(MachineBasicBlock &MBB,
     return;
   }
 
+  // Zvvm matrix vtype state must be established explicitly: vsetvli (11-bit
+  // immediate) cannot encode the high-end matrix fields, so while hardware
+  // retains bs / altfmt_A / altfmt_B verbatim across a vsetvli, it cannot
+  // *write* them — and at an insertion point the incoming hardware state is
+  // not guaranteed to already hold the tracked values (e.g. after an Unknown
+  // merge or a PRE hoist). Emit the register-form PseudoVSETVL_MATRIX, which
+  // writes the complete vtype. A tracked lambda of 0 emits lambda bits of
+  // 000, which per the IME spec is a preserve-or-initialize request and never
+  // destroys the hardware's selected lambda. This path requires AVL in a GPR
+  // — the PseudoVSETIVLI / PseudoVSETVLIX0 forms (immediate AVL / VLMAX)
+  // cannot carry the matrix bits — so materialize an AVL register as needed.
+  if (Info.hasMatrixState()) {
+    Register AVLReg;
+    if (Info.hasAVLReg()) {
+      AVLReg = Info.getAVLReg();
+      MRI->constrainRegClass(AVLReg, &RISCV::GPRNoX0RegClass);
+    } else if (Info.hasAVLImm()) {
+      AVLReg = MRI->createVirtualRegister(&RISCV::GPRNoX0RegClass);
+      auto LI = BuildMI(MBB, InsertPt, DL, TII->get(RISCV::ADDI), AVLReg)
+                    .addReg(RISCV::X0)
+                    .addImm(Info.getAVLImm());
+      if (LIS) {
+        LIS->InsertMachineInstrInMaps(*LI);
+        LIS->createAndComputeVirtRegInterval(AVLReg);
+      }
+    } else {
+      assert(Info.hasAVLVLMAX() && "Unexpected AVL state for matrix vsetvl");
+      // VLMAX with matrix state: materialize -1 (which the hardware treats
+      // as VLMAX in vsetvl) into an AVL register.
+      AVLReg = MRI->createVirtualRegister(&RISCV::GPRNoX0RegClass);
+      auto LI = BuildMI(MBB, InsertPt, DL, TII->get(RISCV::ADDI), AVLReg)
+                    .addReg(RISCV::X0)
+                    .addImm(-1);
+      if (LIS) {
+        LIS->InsertMachineInstrInMaps(*LI);
+        LIS->createAndComputeVirtRegInterval(AVLReg);
+      }
+    }
+
+    Register DestReg = MRI->createVirtualRegister(&RISCV::GPRRegClass);
+    auto MI = BuildMI(MBB, InsertPt, DL, TII->get(RISCV::PseudoVSETVL_MATRIX))
+                  .addReg(DestReg, RegState::Define | RegState::Dead)
+                  .addReg(AVLReg)
+                  .addImm(Info.encodeMatrixVTYPE(ST->getXLen()));
+    if (LIS) {
+      LIS->InsertMachineInstrInMaps(*MI);
+      LIS->createAndComputeVirtRegInterval(DestReg);
+    }
+    return;
+  }
+
   if (PrevInfo.isValid() && !PrevInfo.isUnknown()) {
     // Use X0, X0 form if the AVL is the same and the SEW+LMUL gives the same
     // VLMAX.
@@ -356,10 +407,16 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
 
   // If we only knew the sew/lmul ratio previously, replace the VTYPE.
   if (Info.hasSEWLMULRatioOnly()) {
+    // Note: IncomingInfo comes from computeInfoForInstr and carries no Zvvm
+    // matrix state, so any (stale, merged-across-paths) matrix fields of the
+    // ratio-only state are conservatively dropped to all-zero here.
     VSETVLIInfo RatiolessInfo = IncomingInfo;
     RatiolessInfo.setAVL(Info);
     Info = RatiolessInfo;
   } else {
+    // The merge below may change SEW; capture the old SEW first so we can
+    // apply the IME lambda rules afterwards.
+    unsigned PrevSEW = Info.getSEW();
     Info.setVTYPE(
         ((Demanded.LMUL || Demanded.SEWLMULRatio) ? IncomingInfo : Info)
             .getVLMUL(),
@@ -373,6 +430,22 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
             IncomingInfo.getMaskAgnostic(),
         (Demanded.AltFmt ? IncomingInfo : Info).getAltFmt(),
         Demanded.TWiden ? IncomingInfo.getTWiden() : 0);
+    // The Zvvm matrix fields bs / altfmt_A / altfmt_B survive any vtype
+    // write that doesn't explicitly set them (setVTYPE(6 args) leaves them
+    // alone, matching the hardware retain-verbatim rule for vsetvli).
+    // vtype.lambda, however, is geometry-constrained: per the IME spec, any
+    // vtype write that changes SEW re-evaluates lambda against the new
+    // (VLEN, SEW) and may replace it with the largest supported value — an
+    // implementation-defined outcome the compiler cannot predict (support
+    // never depends on LMUL, so LMUL-only updates keep the tracked value).
+    // Model an SEW-changing write as a may-DEF of lambda by dropping the
+    // tracked value to 0 ("no specific value known/requested"). When this
+    // state is later emitted as a register-form vsetvl, lambda bits of 000
+    // request the spec's preserve-or-initialize behavior, which never
+    // destroys the hardware's selected lambda.
+    if (Info.getSEW() != PrevSEW)
+      Info.setMatrixFields(/*L=*/0, Info.getBs(), Info.getAltFmtA(),
+                           Info.getAltFmtB());
   }
 }
 
@@ -382,7 +455,28 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
 void RISCVInsertVSETVLI::transferAfter(VSETVLIInfo &Info,
                                        const MachineInstr &MI) const {
   if (RISCVInstrInfo::isVectorConfigInstr(MI)) {
-    Info = VIA.getInfoForVSETVLI(MI);
+    VSETVLIInfo NewInfo = VIA.getInfoForVSETVLI(MI);
+    // A plain vsetvli / vsetivli cannot directly write the Zvvm matrix vtype
+    // fields: per the IME spec, hardware retains bs / altfmt_A / altfmt_B
+    // verbatim, and preserves lambda when its value is still supported for
+    // the resulting (VLEN, SEW) — re-canonicalizing it to an
+    // implementation-chosen supported value otherwise. Thread the retained
+    // fields through from the prior state, and keep the tracked lambda only
+    // when SEW is unchanged: an SEW-changing config is a may-DEF of lambda
+    // (IME spec compiler-modeling guidance), so it drops to 0, meaning "no
+    // specific value known/requested". PseudoVSETVL_MATRIX writes the full
+    // vtype (getInfoForVSETVLI already extracted its matrix fields); the
+    // XSfmm configs are left conservatively matrix-free.
+    if (MI.getOpcode() != RISCV::PseudoVSETVL_MATRIX &&
+        !RISCVInstrInfo::isXSfmmVectorConfigInstr(MI) && Info.isValid() &&
+        !Info.isUnknown() && !Info.hasSEWLMULRatioOnly() &&
+        !NewInfo.hasSEWLMULRatioOnly()) {
+      unsigned NewLambda =
+          Info.getSEW() == NewInfo.getSEW() ? Info.getLambda() : 0;
+      NewInfo.setMatrixFields(NewLambda, Info.getBs(), Info.getAltFmtA(),
+                              Info.getAltFmtB());
+    }
+    Info = NewInfo;
     return;
   }
 
@@ -815,6 +909,21 @@ void RISCVInsertVSETVLI::coalesceVSETVLIs(MachineBasicBlock &MBB) const {
     // TODO: Support XSfmm.
     if (RISCVII::hasTWidenOp(MI.getDesc().TSFlags) ||
         RISCVInstrInfo::isXSfmmVectorConfigInstr(MI)) {
+      NextMI = nullptr;
+      continue;
+    }
+    // Zvvm register-form vsetvl carries an XLen-wide vtype immediate whose
+    // matrix fields lie outside the 11-bit window that areCompatibleVTYPEs
+    // considers. Coalescing it with a standard PseudoVSETVLI would silently
+    // drop those matrix bits. Treat it like XSfmm: bail out from coalescing.
+    // Deleting or mutating *plain* vsetvlis elsewhere in the block remains
+    // matrix-safe: per the IME spec a vsetvli retains bs / altfmt_A /
+    // altfmt_B verbatim and can only re-canonicalize lambda, which the
+    // dataflow already models as "no specific value" across SEW changes.
+    // Zvvm matrix instructions read VTYPE implicitly, so getDemanded marks
+    // full VTYPE demand for them and no config they depend on can be
+    // removed across them.
+    if (MI.getOpcode() == RISCV::PseudoVSETVL_MATRIX) {
       NextMI = nullptr;
       continue;
     }

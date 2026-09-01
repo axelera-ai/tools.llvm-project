@@ -424,7 +424,9 @@ void RISCVRegisterInfo::lowerSegmentSpillReload(MachineBasicBlock::iterator II,
   unsigned NF = ZvlssegInfo->first;
   unsigned LMUL = ZvlssegInfo->second;
   unsigned NumRegs = NF * LMUL;
-  assert(NumRegs <= 8 && "Invalid NF/LMUL combinations.");
+  // NF x LMUL <= 8 for the Zvlsseg segment tuples; the IME (Zvvm) m16
+  // accumulator tuple (VRN2M8) is NF=2 x LMUL=8 = 16 registers.
+  assert(NumRegs <= 16 && "Invalid NF/LMUL combinations.");
 
   Register Reg = II->getOperand(0).getReg();
   uint16_t RegEncoding = TRI->getEncodingValue(Reg);
@@ -596,6 +598,7 @@ bool RISCVRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   case RISCV::PseudoVSPILL2_M1:
   case RISCV::PseudoVSPILL2_M2:
   case RISCV::PseudoVSPILL2_M4:
+  case RISCV::PseudoVSPILL2_M8:
   case RISCV::PseudoVSPILL3_M1:
   case RISCV::PseudoVSPILL3_M2:
   case RISCV::PseudoVSPILL4_M1:
@@ -609,6 +612,7 @@ bool RISCVRegisterInfo::eliminateFrameIndex(MachineBasicBlock::iterator II,
   case RISCV::PseudoVRELOAD2_M1:
   case RISCV::PseudoVRELOAD2_M2:
   case RISCV::PseudoVRELOAD2_M4:
+  case RISCV::PseudoVRELOAD2_M8:
   case RISCV::PseudoVRELOAD3_M1:
   case RISCV::PseudoVRELOAD3_M2:
   case RISCV::PseudoVRELOAD4_M1:
