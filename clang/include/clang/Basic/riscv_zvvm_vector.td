@@ -34,6 +34,17 @@
 //     (S ∈ {8,16,32,64} ≥ logical width) for packed narrow tiles.
 //     Non-ISO element types (bf16, OFP8, OFP4, int4) are deferred with the
 //     MX/format phase.
+//   * Overloaded short forms (spec §"Overloaded short forms"): every MAC is
+//     reachable as `__riscv_{mnemonic}_vv` (argument types select the cell,
+//     including sign combos and m16); pair/unpair as `__riscv_ime_vpair` /
+//     `_vunpairlo` / `_vunpairhi`; tile stores and masked tile loads as
+//     `__riscv_{mnemonic}` (value/mask/pointer types disambiguate). The
+//     integer-input MX MACs keep the `_bs{N}` qualifier in their short form
+//     (`__riscv_vfwimmacc_vv_bs32`) because the two block sizes share one C
+//     signature. Unmasked tile-load short calls are inherently unresolvable
+//     (return-type-only variance) and diagnose as ambiguous, mirroring the
+//     upstream unmasked-`vle` behavior; `_L{N}` lambda-override variants and
+//     `_as_e{S}` loads are reachable only through their long names.
 //
 //===----------------------------------------------------------------------===//
 
@@ -260,10 +271,14 @@ class ABLog2LMULTransformer<int cLog2, int abLog2> {
 // field — Suffix is empty so the emitter does NOT append a type-derived
 // suffix. This is the only way to control the IME spec's ordering
 // (`<type>_lm{LMUL}`) since the default auto-suffix produces
-// `<name>_<type>`, not `<name>_<typewithLMUL>`. Each builtin is therefore
-// fully qualified at the C-API layer; `OverloadedName` is set equal to
-// `Name` to disable generic-name overload resolution, which would
-// otherwise erase the LMUL distinction.
+// `<name>_<type>`, not `<name>_<typewithLMUL>`.
+//
+// Every MAC cell additionally registers under the spec's overloaded short
+// form (`OverloadedName = "{mnemonic}_vv"`, e.g. `__riscv_vmmacc_vv`): the
+// (vd, vs1, vs2) argument types fully determine SEW, EMUL_C (including the
+// m16 tuple types), the A/B LMUL, and the sign combination, so overload
+// resolution selects the unique cell — no `_lm{N}`, input-type, or
+// `_su`/`_us` suffix appears in user code (spec §"Overloaded short forms").
 //
 // Per the IME spec's canonical suffix order, the `_lm{N}` qualifier is
 // omitted for LMUL=1: the canonical LMUL=1 long-form name is
@@ -330,7 +345,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
             // (return type, index -1) and A/B (Ops[1]).
             IntrinsicTypes = [-1, 1],
             Name = intName,
-            OverloadedName = intName,
+            OverloadedName = "vmmacc_vv",
             IRName = "vmmacc" in
           def : RVVBuiltin<"", sc[2] # sc[2] # abTfm # sc[3] # abTfm # sc[4],
                            sew[0]>;
@@ -345,7 +360,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
           Log2LMUL = [cLog2],
           IntrinsicTypes = [-1, 1],
           Name = fpName,
-          OverloadedName = fpName,
+          OverloadedName = "vfmmacc_vv",
           IRName = "vfmmacc" in
         def : RVVBuiltin<"", "vv"#abTfm#"v"#abTfm#"v", fpRow[0]>;
     }
@@ -385,7 +400,7 @@ foreach abLog2 = [0, 1, 2, 3] in {    // LMUL ∈ {1,2,4,8}; EMUL_C fixed at 16
           Log2LMUL = [3],
           IntrinsicTypes = [-1, 1],
           Name = intName,
-          OverloadedName = intName,
+          OverloadedName = "vmmacc_vv",
           IRName = "vmmacc_m16" in
         def : RVVBuiltin<"", "(Tuple:2)" # sc[2] # "(Tuple:2)" # sc[2]
                              # m16abTfm # sc[3] # m16abTfm # sc[4], sew[0]>;
@@ -400,7 +415,7 @@ foreach abLog2 = [0, 1, 2, 3] in {    // LMUL ∈ {1,2,4,8}; EMUL_C fixed at 16
         Log2LMUL = [3],
         IntrinsicTypes = [-1, 1],
         Name = fpName,
-        OverloadedName = fpName,
+        OverloadedName = "vfmmacc_vv",
         IRName = "vfmmacc_m16" in
       def : RVVBuiltin<"", "(Tuple:2)v(Tuple:2)v" # m16abTfm # "v"
                            # m16abTfm # "v", fpRow[0]>;
@@ -452,7 +467,7 @@ foreach elt = ZvvmM16PairElts in {
       HasVL = false,
       UnMaskedPolicyScheme = NonePolicy,
       Log2LMUL = [3] in {
-    let Name = pairName, OverloadedName = pairName, IRName = "tuple_insert",
+    let Name = pairName, OverloadedName = "ime_vpair", IRName = "tuple_insert",
         ManualCodegen = [{
           {
             // (lo, hi) -> m16 tuple: two inserts on poison.
@@ -467,7 +482,7 @@ foreach elt = ZvvmM16PairElts in {
         }] in
       def : RVVBuiltin<"", "(Tuple:2)" # elt[2] # elt[2] # elt[2], elt[0]>;
 
-    let Name = unpairloName, OverloadedName = unpairloName,
+    let Name = unpairloName, OverloadedName = "ime_vunpairlo",
         IRName = "tuple_extract",
         ManualCodegen = [{
           {
@@ -479,7 +494,7 @@ foreach elt = ZvvmM16PairElts in {
         }] in
       def : RVVBuiltin<"", elt[2] # "(Tuple:2)" # elt[2], elt[0]>;
 
-    let Name = unpairhiName, OverloadedName = unpairhiName,
+    let Name = unpairhiName, OverloadedName = "ime_vunpairhi",
         IRName = "tuple_extract",
         ManualCodegen = [{
           {
@@ -559,7 +574,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
             Log2LMUL = [abLog2],
             IntrinsicTypes = [-1, 1],
             Name = wName,
-            OverloadedName = wName,
+            OverloadedName = row[0] # "_vv",
             IRName = row[0] in
           def : RVVBuiltin<"", cdTfm # sc[2] # cdTfm # sc[2]
                                # abTfm # sc[3] # abTfm # sc[4], row[1]>;
@@ -575,7 +590,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
           Log2LMUL = [abLog2],
           IntrinsicTypes = [-1, 1],
           Name = wName,
-          OverloadedName = wName,
+          OverloadedName = row[0] # "_vv",
           IRName = row[0] in
         def : RVVBuiltin<"", cdTfm#"v"#cdTfm#"v"#abTfm#"v"#abTfm#"v", row[1]>;
     }
@@ -660,7 +675,7 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
                                 Ops.back()->getType()};
             }],
             Name = mxName,
-            OverloadedName = mxName,
+            OverloadedName = row[0] # "_vv" # bs[0],
             IRName = row[0] in
           def : RVVBuiltin<"", cdTfm # "v" # cdTfm # "v" # abTfm # "v"
                                # abTfm # "v" # "(ScalePair:16)Uv", row[1]>;
@@ -769,12 +784,14 @@ let HasMasked = true,
   let Log2LMUL = [0, 1, 2, 3] in {
     let RequiredFeatures = ["experimental-zvvmtls"],
         Name = "vmtl_v",
+        OverloadedName = "vmtl_v",
         IRName = "vmtl",
         MaskedIRName = "vmtl_mask" in
       def vmtl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
         Name = "vmttl_v",
+        OverloadedName = "vmttl_v",
         IRName = "vmttl",
         MaskedIRName = "vmttl_mask" in
       def vmttl_v : RVVOutOp0Builtin<"v", "vPCez", "csilxfd">;
@@ -783,12 +800,14 @@ let HasMasked = true,
     // spells the u-token; the IR intrinsic is the same signless one.
     let RequiredFeatures = ["experimental-zvvmtls"],
         Name = "vmtl_v",
+        OverloadedName = "vmtl_v",
         IRName = "vmtl",
         MaskedIRName = "vmtl_mask" in
       def vmtl_v_u : RVVOutOp0Builtin<"Uv", "UvPCUez", "csil">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
         Name = "vmttl_v",
+        OverloadedName = "vmttl_v",
         IRName = "vmttl",
         MaskedIRName = "vmttl_mask" in
       def vmttl_v_u : RVVOutOp0Builtin<"Uv", "UvPCUez", "csil">;
@@ -847,12 +866,14 @@ let HasMasked = true,
   let Log2LMUL = [0, 1, 2, 3] in {
     let RequiredFeatures = ["experimental-zvvmtls"],
         Name = "vmts_v",
+        OverloadedName = "vmts_v",
         IRName = "vmts",
         MaskedIRName = "vmts_mask" in
       def vmts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
         Name = "vmtts_v",
+        OverloadedName = "vmtts_v",
         IRName = "vmtts",
         MaskedIRName = "vmtts_mask" in
       def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
@@ -860,12 +881,14 @@ let HasMasked = true,
     // Unsigned integer element types.
     let RequiredFeatures = ["experimental-zvvmtls"],
         Name = "vmts_v",
+        OverloadedName = "vmts_v",
         IRName = "vmts",
         MaskedIRName = "vmts_mask" in
       def vmts_v_u : RVVBuiltin<"Uv", "0PUezUv", "csil">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
         Name = "vmtts_v",
+        OverloadedName = "vmtts_v",
         IRName = "vmtts",
         MaskedIRName = "vmtts_mask" in
       def vmtts_v_u : RVVBuiltin<"Uv", "0PUezUv", "csil">;
@@ -1069,9 +1092,16 @@ foreach st = [["c", "8"], ["s", "16"], ["i", "32"], ["l", "64"]] in {
       foreach cell = cells in {
         defvar tsuf = cell[0] # "m" # lmul # "_as_e" # st[1];
         defvar storeProto = "0PUez" # cell[1];
+        // Natural-width `_as_e{S}` cells are spec-mandated ALIASES of the
+        // plain store (identical C signature), so only the non-natural cells
+        // join the overloaded `vmts_v` short-form set — otherwise the set
+        // would contain duplicate signatures and every such call would be
+        // ambiguous.
+        defvar isNaturalW = !or(!eq(cell[1], "v"), !eq(cell[1], "Uv"),
+                                !eq(cell[1], "Fv"));
         let Log2LMUL = [l2] in {
           let Name = "vmts_v_" # tsuf,
-              OverloadedName = "vmts_v_" # tsuf,
+              OverloadedName = !if(isNaturalW, "vmts_v_" # tsuf, "vmts_v"),
               IRName = "vmts",
               MaskedIRName = "vmts_mask" in
             def : RVVBuiltin<"", storeProto, st[0]>;
