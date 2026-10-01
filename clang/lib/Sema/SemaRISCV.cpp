@@ -617,11 +617,19 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
     StringRef FeaturesStr = A->getFeaturesStr();
     llvm::SmallVector<StringRef> RequiredFeatures;
     FeaturesStr.split(RequiredFeatures, ',');
-    for (auto RF : RequiredFeatures)
-      if (!TI.hasFeature(RF) && !FunctionFeatureMap.lookup(RF))
+    for (auto RF : RequiredFeatures) {
+      // A term may list alternatives as "a|b|c"; any one of them suffices
+      // (the same syntax Builtin::evaluateRequiredTargetFeatures accepts).
+      llvm::SmallVector<StringRef> Alternatives;
+      RF.split(Alternatives, '|');
+      if (llvm::none_of(Alternatives, [&](StringRef Alt) {
+            return TI.hasFeature(Alt) || FunctionFeatureMap.lookup(Alt);
+          }))
         return Diag(TheCall->getBeginLoc(),
                     diag::err_riscv_builtin_requires_extension)
-               << /* IsExtension */ true << TheCall->getSourceRange() << RF;
+               << /* IsExtension */ true << TheCall->getSourceRange()
+               << llvm::join(Alternatives, ", ");
+    }
   }
 
   // vmulh.vv, vmulh.vx, vmulhu.vv, vmulhu.vx, vmulhsu.vv, vmulhsu.vx,

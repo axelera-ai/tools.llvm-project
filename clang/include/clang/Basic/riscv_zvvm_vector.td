@@ -74,11 +74,16 @@ include "riscv_vector_common.td"
 //                                size_t altfmt_a, size_t altfmt_b);
 //===----------------------------------------------------------------------===//
 
-// Configuration and query primitives stay gated on the FAMILY flag
-// (experimental-zvvmm): the spec ties vtype configuration to the Zvvm family
-// as a whole, not to any per-type extension. MAC builtins below are gated on
-// their per-type IME extension (which implies the family flag).
-let RequiredFeatures = ["experimental-zvvmm"],
+// Configuration and query primitives are gated on ANY Zvvm family flag
+// (Zvvmm, Zvvfmm, Zvvmtls or Zvvmttls): the spec ties the vtype fields
+// (lambda / bs / altfmt_A / altfmt_B) to the Zvvm family as a whole, not to
+// any one member or per-type extension, so an FP-only or tile-only
+// configuration must be able to program them. "a|b" is an any-of term.
+// MAC builtins below are gated on their per-type IME extension (which
+// implies its family flag).
+defvar ZvvmAnyFamily = "experimental-zvvmm|experimental-zvvfmm|"
+                       "experimental-zvvmtls|experimental-zvvmttls";
+let RequiredFeatures = [ZvvmAnyFamily],
     SupportOverloading = false,
     HasVL = false,
     HasMasked = false,
@@ -122,7 +127,7 @@ let RequiredFeatures = ["experimental-zvvmm"],
 // time for constants and emitted as cttz/select for runtime requests.
 //===----------------------------------------------------------------------===//
 
-let RequiredFeatures = ["experimental-zvvmm"],
+let RequiredFeatures = [ZvvmAnyFamily],
     SupportOverloading = false,
     HasVL = false,
     HasMasked = false,
@@ -187,7 +192,7 @@ let RequiredFeatures = ["experimental-zvvmm"],
 // compiler may fold it to a constant when VLEN is statically known.
 //===----------------------------------------------------------------------===//
 
-let RequiredFeatures = ["experimental-zvvmm"],
+let RequiredFeatures = [ZvvmAnyFamily],
     SupportOverloading = false,
     HasVL = false,
     HasMasked = false,
@@ -212,7 +217,7 @@ let RequiredFeatures = ["experimental-zvvmm"],
     }] in
   def ime_lambda : RVVBuiltin<"", "z", "i">;
 
-let RequiredFeatures = ["experimental-zvvmm"],
+let RequiredFeatures = [ZvvmAnyFamily],
     SupportOverloading = false,
     HasVL = false,
     HasMasked = false,
