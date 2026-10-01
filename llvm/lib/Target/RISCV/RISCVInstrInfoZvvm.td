@@ -618,7 +618,11 @@ let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE],
     // expandPseudoVSETVLMatrix. earlyclobber prevents the register allocator
     // from coalescing $rd with $rs1, which would otherwise lose the AVL
     // value when the LI sequence writes $rd.
-    Constraints = "@earlyclobber $rd" in
+    Constraints = "@earlyclobber $rd",
+    // Worst case: an up-to-8-instruction XLen constant materialization plus
+    // the vsetvl. Size must be an upper bound of the expansion (branch
+    // relaxation, and RISCVExpandPseudo asserts it).
+    Size = 36 in
 def PseudoVSETVL_MATRIX
     : Pseudo<(outs GPR:$rd), (ins GPRNoX0:$rs1, ixlenimm_li:$vtype), []>,
       Sched<[WriteVSETVL, ReadVSETVL, ReadVSETVL]>;
@@ -640,8 +644,9 @@ def PseudoVSETVL_MATRIX
 // $rd. No vtype write, no scratch required.
 //===----------------------------------------------------------------------===//
 
+// Size: the 13-instruction expansion (both the immediate and register forms).
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE],
-    Constraints = "@earlyclobber $rd,@earlyclobber $scratch" in {
+    Constraints = "@earlyclobber $rd,@earlyclobber $scratch", Size = 52 in {
 def PseudoVSETLAMBDA
     : Pseudo<(outs GPR:$rd, GPR:$scratch), (ins ixlenimm_li:$encoding), []>,
       Sched<[WriteVSETVL, ReadVSETVL]>;
@@ -656,7 +661,8 @@ def PseudoVSETLAMBDA_REG
       Sched<[WriteVSETVL, ReadVSETVL]>;
 } // hasSideEffects = 1, ..., Constraints = "@earlyclobber ..."
 
-let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Uses = [VTYPE] in
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Uses = [VTYPE],
+    Size = 12 in // csrr + srli + andi
 def PseudoQUERYLAMBDA
     : Pseudo<(outs GPR:$rd), (ins), []>;
 
