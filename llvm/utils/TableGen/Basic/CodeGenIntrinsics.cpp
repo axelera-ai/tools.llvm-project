@@ -497,6 +497,7 @@ CodeGenIntrinsic::getValueAsIRMemLocation(const Record *R) const {
       StringSwitch<IRMemLocation>(Name)
           .Case("TargetMem0", IRMemLocation::TargetMem0)
           .Case("TargetMem1", IRMemLocation::TargetMem1)
+          .Case("ArgMem", IRMemLocation::ArgMem)
           .Case("InaccessibleMem", IRMemLocation::InaccessibleMem)
           .Default(IRMemLocation::Other); // fallback enum
 

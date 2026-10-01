@@ -535,17 +535,24 @@ void RISCVDAGToDAGISel::selectVSETVLI(SDNode *Node) {
 //   [XLEN-5]         = bs
 //   [XLEN-4:XLEN-2]  = lambda[2:0]
 //   [XLEN-1]         = vill (hardware-controlled; software writes 0 here)
+//
+// The intrinsic reads and writes the matrix vtype state (modelled as
+// inaccessible memory), so it arrives as INTRINSIC_W_CHAIN and the selected
+// pseudo keeps the chain: that orders it against the other Zvvm vtype-state
+// writers and against the MAC / tile / query readers in the DAG.
 void RISCVDAGToDAGISel::selectVSETVLMatrix(SDNode *Node) {
-  assert(Node->getOpcode() == ISD::INTRINSIC_WO_CHAIN && "Unexpected opcode");
+  assert(Node->getOpcode() == ISD::INTRINSIC_W_CHAIN && "Unexpected opcode");
 
   SDLoc DL(Node);
   MVT XLenVT = Subtarget->getXLenVT();
   unsigned XLen = Subtarget->getXLen();
 
-  // Operand 0 is the intrinsic ID; operand 1 is AVL; operands 2..9 are the
-  // immarg vtype fields in the order declared by the .td.
+  // Operand 0 is the chain, operand 1 the intrinsic ID, operand 2 the AVL;
+  // operands 3..10 are the immarg vtype fields in the order declared by the
+  // .td.
+  SDValue Chain = Node->getOperand(0);
   auto ImmOp = [&](unsigned Idx) {
-    return Node->getConstantOperandVal(Idx);
+    return Node->getConstantOperandVal(Idx + 1);
   };
   uint64_t VSEW    = ImmOp(2) & 0x7;
   uint64_t VLMUL   = ImmOp(3) & 0x7;
@@ -567,11 +574,12 @@ void RISCVDAGToDAGISel::selectVSETVLMatrix(SDNode *Node) {
   // constant into a GPR and emits the register-form `vsetvl` instruction.
   // Routing through a pseudo keeps the InsertVSETVLI pass aware that vtype
   // (including the matrix-specific fields) has been written.
-  SDValue AVL = Node->getOperand(1);
+  SDValue AVL = Node->getOperand(2);
   SDValue VTypeOp = CurDAG->getSignedTargetConstant(
       static_cast<int64_t>(VTypeImm), DL, XLenVT);
   ReplaceNode(Node, CurDAG->getMachineNode(RISCV::PseudoVSETVL_MATRIX, DL,
-                                           XLenVT, AVL, VTypeOp));
+                                           XLenVT, MVT::Other,
+                                           {AVL, VTypeOp, Chain}));
 }
 
 // Lower int_riscv_vsetlambda: encoding (0..7; 0 = preserve-or-initialize
@@ -579,43 +587,48 @@ void RISCVDAGToDAGISel::selectVSETVLMatrix(SDNode *Node) {
 // PseudoVSETLAMBDA_REG (runtime encoding). Both carry two outputs
 // (established encoding into $rd, dead scratch). The intrinsic exposes only
 // the first output; we manually thread that replacement so the dead scratch
-// doesn't leak into user code.
+// doesn't leak into user code. Like vsetvl_matrix, the intrinsic is a
+// vtype-state write (INTRINSIC_W_CHAIN) and the pseudo keeps the chain.
 void RISCVDAGToDAGISel::selectVSETLAMBDA(SDNode *Node) {
-  assert(Node->getOpcode() == ISD::INTRINSIC_WO_CHAIN && "Unexpected opcode");
+  assert(Node->getOpcode() == ISD::INTRINSIC_W_CHAIN && "Unexpected opcode");
 
   SDLoc DL(Node);
   MVT XLenVT = Subtarget->getXLenVT();
 
-  // Operand 0 is the intrinsic ID; operand 1 is the encoding (constant or
-  // runtime; out-of-range runtime values are UB and get masked to 3 bits by
-  // the register-form expansion).
-  SDValue EncOp = Node->getOperand(1);
+  // Operand 0 is the chain, operand 1 the intrinsic ID, operand 2 the
+  // encoding (constant or runtime; out-of-range runtime values are UB and get
+  // masked to 3 bits by the register-form expansion).
+  SDValue Chain = Node->getOperand(0);
+  SDValue EncOp = Node->getOperand(2);
 
   SDNode *MN;
   if (auto *C = dyn_cast<ConstantSDNode>(EncOp)) {
     uint64_t Encoding = C->getZExtValue() & 0x7;
     SDValue EncImm = CurDAG->getSignedTargetConstant(
         static_cast<int64_t>(Encoding), DL, XLenVT);
-    MN = CurDAG->getMachineNode(RISCV::PseudoVSETLAMBDA, DL, {XLenVT, XLenVT},
-                                {EncImm});
+    MN = CurDAG->getMachineNode(RISCV::PseudoVSETLAMBDA, DL,
+                                {XLenVT, XLenVT, MVT::Other}, {EncImm, Chain});
   } else {
     MN = CurDAG->getMachineNode(RISCV::PseudoVSETLAMBDA_REG, DL,
-                                {XLenVT, XLenVT}, {EncOp});
+                                {XLenVT, XLenVT, MVT::Other}, {EncOp, Chain});
   }
   CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 0), SDValue(MN, 0));
+  CurDAG->ReplaceAllUsesOfValueWith(SDValue(Node, 1), SDValue(MN, 2));
   CurDAG->RemoveDeadNode(Node);
 }
 
 // Lower int_riscv_query_lambda: emit PseudoQUERYLAMBDA (csrr vtype + shift +
-// mask). No inputs, single XLenVT output.
+// mask). A read of the matrix vtype state (INTRINSIC_W_CHAIN): the chain
+// orders it after preceding vtype-state writes. Single XLenVT output.
 void RISCVDAGToDAGISel::selectQUERYLAMBDA(SDNode *Node) {
-  assert(Node->getOpcode() == ISD::INTRINSIC_WO_CHAIN && "Unexpected opcode");
+  assert(Node->getOpcode() == ISD::INTRINSIC_W_CHAIN && "Unexpected opcode");
 
   SDLoc DL(Node);
   MVT XLenVT = Subtarget->getXLenVT();
 
-  ReplaceNode(Node,
-              CurDAG->getMachineNode(RISCV::PseudoQUERYLAMBDA, DL, XLenVT));
+  ReplaceNode(Node, CurDAG->getMachineNode(RISCV::PseudoQUERYLAMBDA, DL,
+                                           XLenVT, MVT::Other,
+                                           Node->getOperand(0)));
 }
 
 void RISCVDAGToDAGISel::selectXSfmmVSET(SDNode *Node) {
@@ -2246,12 +2259,6 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
     case Intrinsic::riscv_vsetvli:
     case Intrinsic::riscv_vsetvlimax:
       return selectVSETVLI(Node);
-    case Intrinsic::riscv_vsetvl_matrix:
-      return selectVSETVLMatrix(Node);
-    case Intrinsic::riscv_vsetlambda:
-      return selectVSETLAMBDA(Node);
-    case Intrinsic::riscv_query_lambda:
-      return selectQUERYLAMBDA(Node);
     case Intrinsic::riscv_sf_vsettnt:
     case Intrinsic::riscv_sf_vsettm:
     case Intrinsic::riscv_sf_vsettk:
@@ -2265,6 +2272,14 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       // By default we do not custom select any intrinsic.
     default:
       break;
+    // Zvvm matrix vtype-state intrinsics (inaccessible-memory effects, hence
+    // chained).
+    case Intrinsic::riscv_vsetvl_matrix:
+      return selectVSETVLMatrix(Node);
+    case Intrinsic::riscv_vsetlambda:
+      return selectVSETLAMBDA(Node);
+    case Intrinsic::riscv_query_lambda:
+      return selectQUERYLAMBDA(Node);
     case Intrinsic::riscv_vlseg2:
     case Intrinsic::riscv_vlseg3:
     case Intrinsic::riscv_vlseg4:

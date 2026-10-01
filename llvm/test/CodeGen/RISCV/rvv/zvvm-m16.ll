@@ -25,8 +25,8 @@ define target("riscv.vector.tuple", <vscale x 64 x i8>, 2) @vmmacc_m16_i32_lm1(t
 ; CHECK-NEXT:    slli a3, a3, 3
 ; CHECK-NEXT:    add a1, a1, a3
 ; CHECK-NEXT:    vl8r.v v24, (a1)
-; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vmmacc.vv v16, v8, v9
+; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vs8r.v v16, (a0)
 ; CHECK-NEXT:    vs8r.v v24, (a3)
 ; CHECK-NEXT:    ret
@@ -44,8 +44,8 @@ define target("riscv.vector.tuple", <vscale x 64 x i8>, 2) @vqmmacc_m16_i32_lm2(
 ; CHECK-NEXT:    slli a3, a3, 3
 ; CHECK-NEXT:    add a1, a1, a3
 ; CHECK-NEXT:    vl8r.v v24, (a1)
-; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vqmmacc.vv v16, v8, v10
+; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vs8r.v v16, (a0)
 ; CHECK-NEXT:    vs8r.v v24, (a3)
 ; CHECK-NEXT:    ret
@@ -63,8 +63,8 @@ define target("riscv.vector.tuple", <vscale x 64 x i8>, 2) @vfmmacc_m16_f32_lm1(
 ; CHECK-NEXT:    slli a3, a3, 3
 ; CHECK-NEXT:    add a1, a1, a3
 ; CHECK-NEXT:    vl8r.v v24, (a1)
-; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vfmmacc.vv v16, v8, v9
+; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vs8r.v v16, (a0)
 ; CHECK-NEXT:    vs8r.v v24, (a3)
 ; CHECK-NEXT:    ret

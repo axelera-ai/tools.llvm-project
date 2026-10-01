@@ -84,6 +84,33 @@ size_t test_ime_lambda(void) {
   return __riscv_ime_lambda();
 }
 
+// A lambda write is a vtype-state write even when its result is unused: it
+// must survive -O2 (the unused __riscv_vsetvl_e16m4 folds away, since the RVV
+// vsetvl intrinsics only compute vl).
+//
+// CHECK-LABEL: define dso_local void @test_vsetlambda_unused
+// CHECK:         tail call i64 @llvm.riscv.vsetlambda.i64(i64 5)
+// CHECK-NEXT:    ret void
+//
+void test_vsetlambda_unused(void) {
+  __riscv_vsetvl_e16m4(1024);
+  (void)__riscv_vsetlambda(16);
+}
+
+// Two identical lambda writes are not CSE'd into one.
+//
+// CHECK-LABEL: define dso_local{{.*}} i64 @test_vsetlambda_no_cse
+// CHECK:         tail call i64 @llvm.riscv.vsetlambda.i64(i64 5)
+// CHECK:         tail call i64 @llvm.riscv.vsetlambda.i64(i64 5)
+// CHECK:         ret i64
+//
+size_t test_vsetlambda_no_cse(void) {
+  size_t x = __riscv_vsetlambda(16);
+  __riscv_vsetvl_e32m4(512);
+  size_t y = __riscv_vsetlambda(16);
+  return x + y;
+}
+
 // __riscv_ime_vlen(): read_register(vlenb) scaled from bytes to bits.
 //
 // CHECK-LABEL: define dso_local{{.*}} i64 @test_ime_vlen

@@ -19,6 +19,29 @@
 // shorthands are private to other targets' .td files.)
 def llvm_zvvm_scale_ty : LLVMType<nxv4i16>;
 
+// Memory-effect modelling of the matrix vtype state.
+//
+// The Zvvm matrix vtype fields (lambda, bs, altfmt_A, altfmt_B) are
+// architectural state that the compiler cannot re-derive: InsertVSETVLI
+// reconstructs SEW / LMUL / policy for every ordinary RVV instruction from its
+// operands (which is why int_riscv_vsetvli can be IntrNoMem), but lambda is a
+// WARL value established by hardware, and bs / altfmt_A / altfmt_B are chosen
+// by the programmer. That state is therefore modelled as inaccessible memory:
+//
+//   - the writers (vsetvl_matrix, vsetlambda) read and write inaccessible
+//     memory, so they are never deleted, CSE'd, hoisted, or reordered
+//     relative to each other, even when their result is unused;
+//   - the readers (query_lambda, every MAC, every tile load/store) read
+//     inaccessible memory, so they cannot be moved across a writer, while
+//     staying freely CSE-able / DCE-able / reorderable among themselves;
+//   - tile loads additionally read, and tile stores write, only their
+//     argument memory, so their aliasing with ordinary loads and stores is
+//     unchanged.
+//
+// Ordinary RVV intrinsics are untouched (IntrNoMem). At the machine level the
+// same ordering is carried by the VTYPE physical register: the writer pseudos
+// have Defs = [VL, VTYPE] and the reader pseudos Uses = [VTYPE].
+
 let TargetPrefix = "riscv" in {
   //===--------------------------------------------------------------------===//
   // Extended vsetvl: programs the full vtype CSR including the matrix-specific
@@ -60,7 +83,7 @@ let TargetPrefix = "riscv" in {
                                LLVMMatchType<0>,  // BS
                                LLVMMatchType<0>,  // ALTFMT_A
                                LLVMMatchType<0>], // ALTFMT_B
-                              [IntrNoMem,
+                              [IntrInaccessibleMemOnly,
                                ImmArg<ArgIndex<1>>, ImmArg<ArgIndex<2>>,
                                ImmArg<ArgIndex<3>>, ImmArg<ArgIndex<4>>,
                                ImmArg<ArgIndex<5>>, ImmArg<ArgIndex<6>>,
@@ -93,20 +116,22 @@ let TargetPrefix = "riscv" in {
   // largest supported value <= the request, or the smallest supported value
   // when none is. Lambda support depends on (VLEN, SEW) only — never LMUL.
   //
-  // IntrNoMem mirrors the int_riscv_vsetvli convention (vtype is not part of
-  // the IR memory model). At the machine level, the lowered pseudo carries
-  // Defs = [VL, VTYPE] which preserves ordering with respect to subsequent
-  // vector / matrix instructions through standard VL/VTYPE liveness.
+  // Reads and writes the matrix vtype state (inaccessible memory; see the
+  // header comment). Unlike SEW / LMUL, the established lambda cannot be
+  // re-derived by InsertVSETVLI, so this must not be IntrNoMem.
   def int_riscv_vsetlambda
       : DefaultAttrsIntrinsic<[llvm_anyint_ty],
                               [LLVMMatchType<0>], // encoding
-                              [IntrNoMem]>;
+                              [IntrInaccessibleMemOnly]>;
 
   // Read the current `vtype.lambda` encoding (0..7) without writing vtype.
   // Pure read of `vtype`; the spec contract is that this intrinsic does not
-  // perturb any vtype state.
+  // perturb any vtype state. Reads the matrix vtype state (inaccessible
+  // memory), so it is ordered after preceding writes but may be CSE'd with
+  // another query when no write intervenes.
   def int_riscv_query_lambda
-      : DefaultAttrsIntrinsic<[llvm_anyint_ty], [], [IntrNoMem]>;
+      : DefaultAttrsIntrinsic<[llvm_anyint_ty], [],
+                              [IntrReadMem, IntrInaccessibleMemOnly]>;
 
   // Shape shared by all integer matrix multiply-accumulate intrinsics:
   //   (C, A, B, vl) -> C
@@ -121,18 +146,17 @@ let TargetPrefix = "riscv" in {
   // Signedness of A and B (altfmt_A / altfmt_B) and the lambda value are
   // selected by `vtype` and must be configured via `vsetvl` before the call.
   //
-  // Memory effect is IntrNoMem, matching every other RVV intrinsic in this
-  // file. Ordering with respect to vsetvl is preserved by the SSA dataflow on
-  // the vl operand: a matrix-multiply-accumulate consumes the vl produced by
-  // the immediately preceding vsetvl, so LLVM cannot hoist or sink it past
-  // that vsetvl.
+  // The MAC reads the matrix vtype state (lambda, altfmt_A/B, bs), modelled
+  // as an inaccessible-memory read (see the header comment): the vl operand
+  // gives no dependence on a preceding vsetlambda / vsetvl_matrix, so without
+  // it the call could be hoisted, sunk, or CSE'd across such a write.
   class RISCVMatrixMAC
       : DefaultAttrsIntrinsic<[llvm_anyvector_ty],
                               [LLVMMatchType<0>,
                                llvm_anyvector_ty,
                                LLVMMatchType<1>,
                                llvm_anyint_ty],
-                              [IntrNoMem]>,
+                              [IntrReadMem, IntrInaccessibleMemOnly]>,
         RISCVVIntrinsic {
     let VLOperand = 3;
   }
@@ -187,7 +211,8 @@ let TargetPrefix = "riscv" in {
                                llvm_zvvm_scale_ty,      // paired E8M0 scales
                                llvm_anyint_ty,       // bs (semantic record)
                                LLVMMatchType<2>],    // vl
-                              [IntrNoMem, ImmArg<ArgIndex<4>>,
+                              [IntrReadMem, IntrInaccessibleMemOnly,
+                               ImmArg<ArgIndex<4>>,
                                Range<ArgIndex<4>, 0, 2>]>,
         RISCVVIntrinsic {
     let VLOperand = 5;
@@ -216,7 +241,7 @@ let TargetPrefix = "riscv" in {
                                llvm_anyvector_ty,
                                LLVMMatchType<1>,
                                llvm_anyint_ty],
-                              [IntrNoMem]>,
+                              [IntrReadMem, IntrInaccessibleMemOnly]>,
         RISCVVIntrinsic {
     let VLOperand = 3;
   }
@@ -241,7 +266,8 @@ let TargetPrefix = "riscv" in {
                                llvm_zvvm_scale_ty,      // paired E8M0 scales
                                llvm_anyint_ty,       // bs (semantic record)
                                LLVMMatchType<2>],    // vl
-                              [IntrNoMem, ImmArg<ArgIndex<4>>,
+                              [IntrReadMem, IntrInaccessibleMemOnly,
+                               ImmArg<ArgIndex<4>>,
                                Range<ArgIndex<4>, 0, 2>]>,
         RISCVVIntrinsic {
     let VLOperand = 5;
@@ -274,6 +300,11 @@ let TargetPrefix = "riscv" in {
   // supported set must probe via the vtype-write path (vsetvl /
   // __riscv_vsetlambda readback), not via the instruction immediate.
   //
+  // Memory effects: loads read argmem, stores write argmem, and both read
+  // (never write) the matrix vtype state, i.e. inaccessible memory. Stores
+  // use IntrRead<[InaccessibleMem]> + IntrWrite<[ArgMem]> to get exactly
+  // `argmem: write, inaccessiblemem: read`.
+  //
   // `ld` (leading dimension in elements) is held in a GPR. `ld == 0` selects
   // a hardware-defined default stride: `lambda * LMUL` for the order-preserving
   // variants (vmtl.v / vmts.v) — a contiguous tile — and `VLEN / (SEW * lambda)`
@@ -286,7 +317,7 @@ let TargetPrefix = "riscv" in {
                               [LLVMMatchType<0>, llvm_anyptr_ty,
                                llvm_anyint_ty, LLVMMatchType<2>],
                               [NoCapture<ArgIndex<1>>, IntrReadMem,
-                               IntrArgMemOnly]>,
+                               IntrInaccessibleMemOrArgMemOnly]>,
         RISCVVIntrinsic {
     let VLOperand = 3;
   }
@@ -298,7 +329,7 @@ let TargetPrefix = "riscv" in {
                                LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>,
                                LLVMMatchType<2>, LLVMMatchType<2>],
                               [NoCapture<ArgIndex<1>>, ImmArg<ArgIndex<5>>,
-                               IntrReadMem, IntrArgMemOnly]>,
+                               IntrReadMem, IntrInaccessibleMemOrArgMemOnly]>,
         RISCVVIntrinsic {
     let VLOperand = 4;
   }
@@ -307,8 +338,10 @@ let TargetPrefix = "riscv" in {
       : DefaultAttrsIntrinsic<[],
                               [llvm_anyvector_ty, llvm_anyptr_ty,
                                llvm_anyint_ty, LLVMMatchType<2>],
-                              [NoCapture<ArgIndex<1>>, IntrWriteMem,
-                               IntrArgMemOnly]>,
+                              [NoCapture<ArgIndex<1>>,
+                               IntrInaccessibleMemOrArgMemOnly,
+                               IntrRead<[InaccessibleMem]>,
+                               IntrWrite<[ArgMem]>]>,
         RISCVVIntrinsic {
     let VLOperand = 3;
   }
@@ -319,8 +352,10 @@ let TargetPrefix = "riscv" in {
                                llvm_anyint_ty,
                                LLVMScalarOrSameVectorWidth<0, llvm_i1_ty>,
                                LLVMMatchType<2>],
-                              [NoCapture<ArgIndex<1>>, IntrWriteMem,
-                               IntrArgMemOnly]>,
+                              [NoCapture<ArgIndex<1>>,
+                               IntrInaccessibleMemOrArgMemOnly,
+                               IntrRead<[InaccessibleMem]>,
+                               IntrWrite<[ArgMem]>]>,
         RISCVVIntrinsic {
     let VLOperand = 4;
   }

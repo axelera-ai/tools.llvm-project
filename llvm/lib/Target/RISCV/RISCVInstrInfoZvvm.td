@@ -155,7 +155,15 @@ def RISCVMatrixPseudosTable : GenericTable {
   let PrimaryKeyEarlyOut = true;
 }
 
-let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
+// mayLoad = 1: the MAC intrinsics read the matrix vtype state, modelled in IR
+// as an inaccessible-memory read (IntrReadMem + IntrInaccessibleMemOnly), and
+// tablegen requires a pattern rooted at a memory-reading intrinsic to select
+// a mayLoad instruction (the same convention as the AArch64 FP8 instructions
+// that read FPMR). The ordering against vsetlambda / vsetvl_matrix that the
+// IR modelling encodes is carried at the MI level by Uses = [VTYPE] vs. the
+// writers' Defs = [VL, VTYPE]; mayLoad additionally orders the MAC against
+// stores, which is conservative but harmless (no MAC accesses memory).
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0,
     Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in
 class PseudoVMatrixMACPair<Instruction realInst,
                            VTypeInfo cti, VTypeInfo abti>
@@ -167,7 +175,8 @@ class PseudoVMatrixMACPair<Instruction realInst,
 // EMUL_C = 16 variant: vd is the IME m16 accumulator — a 16-register-aligned
 // pair of M8 groups (VRN2M8, IR type riscv_nxv64i8x2). Same operand shape and
 // MC lowering (Kind = MAC); baseVRRegister peels the tuple to its base VR.
-let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
+// mayLoad = 1: see PseudoVMatrixMACPair.
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0,
     Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in
 class PseudoVMatrixMACPairM16<Instruction realInst, VTypeInfo abti>
     : Pseudo<(outs VRN2M8:$vd_wb),
@@ -471,7 +480,8 @@ foreach row = ZvvmFPMACRows in {
 // the format); BS=16 rows share the BS=32 patterns (bs is not encoded).
 //===----------------------------------------------------------------------===//
 
-let hasSideEffects = 0, mayLoad = 0, mayStore = 0,
+// mayLoad = 1: see PseudoVMatrixMACPair.
+let hasSideEffects = 0, mayLoad = 1, mayStore = 0,
     Uses = [VL, VTYPE], Constraints = "$vd = $vd_wb" in {
 class PseudoVMatrixMACPairScaled<Instruction realInst,
                                  VTypeInfo cti, VTypeInfo abti>
@@ -485,7 +495,7 @@ class PseudoVMatrixMACPairScaledM16<Instruction realInst, VTypeInfo abti>
              (ins VRN2M8:$vd, abti.RegClass:$vs1,
                   abti.RegClass:$vs2, VMV0Pair:$scale, GPRNoX0:$vl), []>,
       RISCVMatrixPseudo<realInst, /*MACScaled=*/5>;
-} // hasSideEffects = 0, ..., Constraints
+} // hasSideEffects = 0, mayLoad = 1, ..., Constraints
 
 // FP scaled pseudo grids (vm=0 forms of the FP widening mnemonics).
 let Predicates = [HasStdExtZvvfmm] in {
@@ -856,7 +866,10 @@ class PseudoVMatrixTileStore<Instruction realInst, LMULInfo m>
              (ins m.vrclass:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
                   lambdaarg:$lambda, GPRNoX0:$vl), []>,
       RISCVMatrixPseudo<realInst, /*TileStore=*/3> {
-  let mayLoad = 0;
+  // mayLoad = 1: the tile-store intrinsics read the matrix vtype state
+  // (inaccessible memory), which tablegen maps to mayLoad; see
+  // PseudoVMatrixMACPair.
+  let mayLoad = 1;
   let mayStore = 1;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE];
@@ -867,7 +880,10 @@ class PseudoVMatrixTileStoreMask<Instruction realInst, LMULInfo m>
              (ins m.vrclass:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
                   lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl), []>,
       RISCVMatrixPseudo<realInst, /*TileStoreMask=*/4> {
-  let mayLoad = 0;
+  // mayLoad = 1: the tile-store intrinsics read the matrix vtype state
+  // (inaccessible memory), which tablegen maps to mayLoad; see
+  // PseudoVMatrixMACPair.
+  let mayLoad = 1;
   let mayStore = 1;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE, V0];
