@@ -191,6 +191,28 @@ void RISCVInsertVSETVLI::insertVSETVLI(MachineBasicBlock &MBB,
   // — the PseudoVSETIVLI / PseudoVSETVLIX0 forms (immediate AVL / VLMAX)
   // cannot carry the matrix bits — so materialize an AVL register as needed.
   if (Info.hasMatrixState()) {
+    // A transition that changes only vtype.altfmt (e.g. for a Zvvm BF16-
+    // accumulator MAC) needs no register-form vsetvl: altfmt lies inside the
+    // vsetvli immediate, an unchanged SEW keeps lambda, bs / altfmt_A /
+    // altfmt_B are retained verbatim, and an unchanged VLMAX keeps vl.
+    if (PrevInfo.isValid() && !PrevInfo.isUnknown() &&
+        !PrevInfo.hasSEWLMULRatioOnly() &&
+        PrevInfo.getAltFmt() != Info.getAltFmt()) {
+      VSETVLIInfo AltFmtOnly = PrevInfo;
+      AltFmtOnly.setAltFmt(Info.getAltFmt());
+      if (AltFmtOnly.hasSameVTYPE(Info) && AltFmtOnly.hasSameAVL(Info)) {
+        auto MI =
+            BuildMI(MBB, InsertPt, DL, TII->get(RISCV::PseudoVSETVLIX0X0))
+                .addReg(RISCV::X0, RegState::Define | RegState::Dead)
+                .addReg(RISCV::X0, RegState::Kill)
+                .addImm(Info.encodeVTYPE())
+                .addReg(RISCV::VL, RegState::Implicit);
+        if (LIS)
+          LIS->InsertMachineInstrInMaps(*MI);
+        return;
+      }
+    }
+
     Register AVLReg;
     if (Info.hasAVLReg()) {
       AVLReg = Info.getAVLReg();
@@ -377,6 +399,42 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
     return;
   }
 
+  // Zvvm FP matrix MACs. vtype.altfmt selects — together with SEW — the
+  // accumulator format (FP16 vs BF16 at SEW=16, E4M3 vs E5M2 at SEW=8,
+  // reserved at SEW=32/64). It is fixed by the IR accumulator type and cannot
+  // be written by vsetvl_matrix, so the pass must establish it; and because
+  // its meaning depends on SEW, the MAC also demands its SEW (the accumulator
+  // SEW), its LMUL (the A/B LMUL) and its VL — exactly the values a
+  // correctly-programmed caller has already set, so in the common case
+  // (vsetvl_matrix immediately before the MAC) only altfmt can differ. The
+  // remaining fields are caller state and are kept: policy, and the matrix
+  // fields lambda / bs / altfmt_A / altfmt_B (an SEW-changing write is a
+  // may-DEF of lambda, modelled as in the generic path below).
+  if (RISCV::isZvvmAltFmtMAC(MI)) {
+    const VSETVLIInfo NewInfo = VIA.computeInfoForZvvmMAC(MI);
+    if (!Info.isValid() || Info.isUnknown() || Info.hasSEWLMULRatioOnly() ||
+        Info.getTWiden() != 0) {
+      Info = NewInfo;
+      return;
+    }
+    DemandedFields Demanded;
+    Demanded.SEW = DemandedFields::SEWEqual;
+    Demanded.LMUL = DemandedFields::LMULEqual;
+    Demanded.AltFmt = true;
+    Demanded.VLAny = true;
+    if (Info.isCompatible(Demanded, NewInfo, LIS))
+      return;
+    unsigned PrevSEW = Info.getSEW();
+    if (!(Info.hasSameAVL(NewInfo) && Info.hasSameVLMAX(NewInfo)))
+      Info.setAVL(NewInfo);
+    Info.setVTYPE(NewInfo.getVLMUL(), NewInfo.getSEW(), Info.getTailAgnostic(),
+                  Info.getMaskAgnostic(), NewInfo.getAltFmt(), /*W=*/0);
+    if (Info.getSEW() != PrevSEW)
+      Info.setMatrixFields(/*L=*/0, Info.getBs(), Info.getAltFmtA(),
+                           Info.getAltFmtB());
+    return;
+  }
+
   if (!RISCVII::hasSEWOp(MI.getDesc().TSFlags))
     return;
 
@@ -513,7 +571,8 @@ bool RISCVInsertVSETVLI::computeVLVTYPEChanges(const MachineBasicBlock &MBB,
     if (RISCVInstrInfo::isVectorConfigInstr(MI) ||
         RISCVII::hasSEWOp(MI.getDesc().TSFlags) ||
         RISCV::isVectorCopy(ST->getRegisterInfo(), MI) ||
-        RISCVInstrInfo::isXSfmmVectorConfigInstr(MI))
+        RISCVInstrInfo::isXSfmmVectorConfigInstr(MI) ||
+        RISCV::isZvvmAltFmtMAC(MI))
       HadVectorOp = true;
 
     transferAfter(Info, MI);
@@ -705,6 +764,16 @@ void RISCVInsertVSETVLI::emitVSETVLIs(MachineBasicBlock &MBB) {
       }
       MI.addOperand(MachineOperand::CreateReg(RISCV::VTYPE, /*isDef*/ false,
                                               /*isImp*/ true));
+    }
+
+    // Zvvm FP matrix MAC: transferBefore established the vtype it demands
+    // (see there). The pseudo already carries implicit VL / VTYPE uses and
+    // keeps its $vl operand.
+    if (RISCV::isZvvmAltFmtMAC(MI) &&
+        !PrevInfo.isCompatible(DemandedFields::all(), CurInfo, LIS)) {
+      if (!PrefixTransparent || needVSETVLIPHI(CurInfo, MBB))
+        insertVSETVLI(MBB, MI, MI.getDebugLoc(), CurInfo, PrevInfo);
+      PrefixTransparent = false;
     }
 
     if (MI.isInlineAsm()) {

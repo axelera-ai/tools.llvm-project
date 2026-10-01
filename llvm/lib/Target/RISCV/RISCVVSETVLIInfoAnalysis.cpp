@@ -538,5 +538,42 @@ RISCVVSETVLIInfoAnalysis::computeInfoForInstr(const MachineInstr &MI) const {
 
   return InstrInfo;
 }
+
+bool isZvvmAltFmtMAC(const MachineInstr &MI) {
+  if (RISCVII::getAltFmtType(MI.getDesc().TSFlags) ==
+      RISCVII::AltFmtType::DontCare)
+    return false;
+  const auto *Info =
+      RISCVMatrixPseudosTable::getMatrixPseudoInfo(MI.getOpcode());
+  return Info && (Info->Kind == RISCVMatrixPseudosTable::MAC ||
+                  Info->Kind == RISCVMatrixPseudosTable::MACScaled);
+}
+
+VSETVLIInfo
+RISCVVSETVLIInfoAnalysis::computeInfoForZvvmMAC(const MachineInstr &MI) const {
+  assert(isZvvmAltFmtMAC(MI) && "Expected a Zvvm FP matrix MAC");
+  const uint64_t TSFlags = MI.getDesc().TSFlags;
+  // Operand layout: ..., $vl, $sew (the last two explicit operands).
+  unsigned NumOps = MI.getNumExplicitOperands();
+  const MachineOperand &VLOp = MI.getOperand(NumOps - 2);
+  unsigned Log2SEW = MI.getOperand(NumOps - 1).getImm();
+  unsigned SEW = 1 << Log2SEW;
+  assert(RISCVVType::isValidSEW(SEW) && "Unexpected SEW");
+
+  VSETVLIInfo InstrInfo;
+  Register AVLReg = VLOp.getReg();
+  InstrInfo.setAVLRegDef(getVNInfoFromReg(AVLReg, MI, LIS), AVLReg);
+  // Tail-undisturbed is a valid implementation of whatever tail policy the
+  // caller programmed, so it is the safe choice when the incoming vtype is
+  // unknown. The MACs are never masked, so (as for any RVV pseudo without a
+  // mask policy) mask-agnostic is used.
+  InstrInfo.setVTYPE(RISCVII::getLMul(TSFlags), SEW, /*TA=*/false,
+                     /*MA=*/true,
+                     RISCVII::getAltFmtType(TSFlags) ==
+                         RISCVII::AltFmtType::AltFmt,
+                     /*TWiden=*/0);
+  forwardVSETVLIAVL(InstrInfo);
+  return InstrInfo;
+}
 } // namespace RISCV
 } // namespace llvm

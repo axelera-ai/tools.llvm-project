@@ -1072,7 +1072,9 @@ foreach ext = ["Zvvi8mm", "Zvvi16mm", "Zvvi32mm", "Zvvi64mm",
                "Zvvi8i32mm", "Zvvi16i64mm", "Zvvi8i64mm",
                "Zvvofp8mm", "Zvvfp16mm", "Zvvfp32mm", "Zvvfp64mm",
                "Zvvofp8fp16mm", "Zvvfp16fp32mm", "Zvvfp32fp64mm",
-               "Zvvofp8fp32mm", "Zvvfp16fp64mm", "Zvvofp8fp64mm"] in
+               "Zvvofp8fp32mm", "Zvvfp16fp64mm", "Zvvofp8fp64mm",
+               "Zvvbf16mm", "Zvvofp8bf16mm", "Zvvbf16fp32mm",
+               "Zvvbf16fp64mm"] in
   def "HasStdExt"#ext
       : Predicate<"Subtarget->hasStdExt"#ext#"()">,
         AssemblerPredicate<
@@ -1083,7 +1085,8 @@ foreach ext = ["Zvvi8mm", "Zvvi16mm", "Zvvi32mm", "Zvvi64mm",
 // (the BS=16 flags need no separate predicates: `bs` is a vtype field, not an
 // encoding bit, so BS-16 rows share the BS-32 patterns).
 foreach ext = ["Zvvxi8fp16mm", "Zvvxi8fp32mm", "Zvvxi8fp64mm",
-               "Zvvxofp8fp16mm", "Zvvxofp8fp32mm", "Zvvxofp8fp64mm"] in
+               "Zvvxofp8fp16mm", "Zvvxofp8fp32mm", "Zvvxofp8fp64mm",
+               "Zvvxi8bf16mm", "Zvvxofp8bf16mm"] in
   def "HasStdExt"#ext
       : Predicate<"Subtarget->hasStdExt"#ext#"()">,
         AssemblerPredicate<

@@ -63,6 +63,7 @@ define target("riscv.vector.tuple", <vscale x 64 x i8>, 2) @vfmmacc_m16_f32_lm1(
 ; CHECK-NEXT:    slli a3, a3, 3
 ; CHECK-NEXT:    add a1, a1, a3
 ; CHECK-NEXT:    vl8r.v v24, (a1)
+; CHECK-NEXT:    vsetvli zero, a2, e32, m1, tu, ma
 ; CHECK-NEXT:    vfmmacc.vv v16, v8, v9
 ; CHECK-NEXT:    add a3, a0, a3
 ; CHECK-NEXT:    vs8r.v v16, (a0)

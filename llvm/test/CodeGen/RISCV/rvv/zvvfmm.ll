@@ -9,11 +9,13 @@
 
 ; Zvvfmm floating-point matrix multiply-accumulate intrinsics.
 ;
-; Phase 1 does not integrate with RISCVInsertVSETVLI, so no vsetvli is emitted
-; for these intrinsics; the caller is responsible for programming vtype
-; (SEW, LMUL, lambda, altfmt_A/altfmt_B) via vsetvl before invoking the MAC.
-; The tests therefore only verify the mnemonic, source registers, and
-; tied-operand constraint ($vd = $vd_wb).
+; The caller is responsible for programming the matrix vtype fields (lambda,
+; altfmt_A/altfmt_B) via vsetvl_matrix before invoking the MAC. RISCVInsertVSETVLI
+; establishes only the accumulator format (vtype.altfmt) and the SEW / LMUL /
+; VL it is read against — here, from an unknown entry state, a full vsetvli
+; (see zvvm-bf16.ll for the altfmt transitions). The tests otherwise only
+; verify the mnemonic, source registers, and tied-operand constraint
+; ($vd = $vd_wb).
 ;
 ; OFP8 inputs at LMUL=1 use the nxv8i8 IR container — LLVM has no first-class
 ; FP8 vector type for E4M3 / E5M2, and vtype.altfmt selects the FP8

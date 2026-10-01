@@ -1238,13 +1238,14 @@ static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
   using namespace RISCVMatrixPseudosTable;
   switch (Info->Kind) {
   case MAC: {
-    // Operands 0..3 → real operands; $vl at operand 4 is dropped.
+    // Operands 0..3 → real operands; $vl (and the FP MACs' $sew) dropped.
     for (unsigned OpNo = 0; OpNo < 4; ++OpNo)
       OutMI.addOperand(lowerVectorReg(MI->getOperand(OpNo), TRI));
     return true;
   }
   case MACScaled: {
-    // Pseudo: vd_wb (def), vd (tied), vs1, vs2, scale (VMV0Pair = v0), vl.
+    // Pseudo: vd_wb (def), vd (tied), vs1, vs2, scale (VMV0Pair = v0), vl,
+    // sew.
     // Real: vd_wb, vd, vs1, vs2, v0.scale. The scale operand is pinned to
     // v0 by its register class; the real instruction's VScaleOp operand
     // encodes it as vm=0.

@@ -689,6 +689,15 @@ inline raw_ostream &operator<<(raw_ostream &OS, const VSETVLIInfo &V) {
 }
 #endif
 
+/// Return true if \p MI is a Zvvm FP matrix multiply-accumulate pseudo whose
+/// accumulator format pins vtype.altfmt (AltFmtType != DontCare). These are
+/// not standard RVV pseudos (no HasSEWOp / HasVLOp): the caller programs the
+/// matrix fields lambda / bs / altfmt_A / altfmt_B via vsetvl_matrix, while
+/// RISCVInsertVSETVLI establishes the accumulator format bit (altfmt, FP16 vs
+/// BF16 at SEW=16) from the IR element type, together with the SEW / LMUL /
+/// VL it is interpreted against.
+bool isZvvmAltFmtMAC(const MachineInstr &MI);
+
 class RISCVVSETVLIInfoAnalysis {
   const RISCVSubtarget *ST;
   // Possibly null!
@@ -701,6 +710,10 @@ public:
 
   VSETVLIInfo getInfoForVSETVLI(const MachineInstr &MI) const;
   VSETVLIInfo computeInfoForInstr(const MachineInstr &MI) const;
+  // Complete vtype for a Zvvm FP matrix MAC (see isZvvmAltFmtMAC): accumulator
+  // SEW from the pseudo's $sew operand, A/B LMUL from TSFlags, AVL from $vl,
+  // altfmt from the pseudo's AltFmtType, tail-undisturbed.
+  VSETVLIInfo computeInfoForZvvmMAC(const MachineInstr &MI) const;
 
 private:
   void forwardVSETVLIAVL(VSETVLIInfo &Info) const;
