@@ -78,6 +78,14 @@ enum class VectorTypeModifier : uint8_t {
   // scalar-kind change, which no composition of the single-axis
   // transformers above can express (one vector-type modifier per operand).
   ScalePairU16M1,
+  // Zvvm/IME OFP8: `(OFP8:E4M3)` / `(OFP8:E5M2)` turn the operand into the
+  // distinct OFP8 vector type (vfloat8e4m3*_t / vfloat8e5m2*_t) at the base
+  // type's LMUL, whatever the base element type. Combines the SEW change to 8
+  // with the scalar-kind change that no other transformer can express (there
+  // is no OFP8 TypeModifier), e.g. an OFP8 input operand of a def based on a
+  // wider accumulator type. Invalid when the base is already that format.
+  OFP8E4M3,
+  OFP8E5M2,
 };
 
 // Similar to basic type but used to describe what's kind of type related to
@@ -218,10 +226,15 @@ enum class BasicType : uint16_t {
   Float16 = 1 << 5,
   Float32 = 1 << 6,
   Float64 = 1 << 7,
+  // Zvfofp8min (upstream) OFP8 element types: spelled as vuint8 C types.
   F8E4M3 = 1 << 8,
   F8E5M2 = 1 << 9,
-  MaxOffset = 9,
-  LLVM_MARK_AS_BITMASK_ENUM(F8E5M2),
+  // Zvvm/IME OFP8 element types: the distinct vfloat8e4m3*_t /
+  // vfloat8e5m2*_t C types (i8 container in IR).
+  OFP8E4M3 = 1 << 10,
+  OFP8E5M2 = 1 << 11,
+  MaxOffset = 11,
+  LLVM_MARK_AS_BITMASK_ENUM(OFP8E5M2),
 };
 
 // Type of vector type.
@@ -236,8 +249,13 @@ enum ScalarTypeKind : uint8_t {
   UnsignedInteger,
   Float,
   BFloat,
+  // Upstream Zvfofp8min OFP8 kinds; their C vector types are vuint8*_t.
   FloatE4M3,
   FloatE5M2,
+  // Zvvm/IME OFP8 kinds; C vector types vfloat8e4m3*_t / vfloat8e5m2*_t,
+  // scalars (no OFP8 scalar C type) are uint8_t.
+  OFP8E4M3,
+  OFP8E5M2,
   Invalid,
   Undefined,
 };
@@ -314,6 +332,10 @@ public:
   }
   bool isFloat() const { return ScalarType == ScalarTypeKind::Float; }
   bool isBFloat() const { return ScalarType == ScalarTypeKind::BFloat; }
+  bool isOFP8() const {
+    return ScalarType == ScalarTypeKind::OFP8E4M3 ||
+           ScalarType == ScalarTypeKind::OFP8E5M2;
+  }
   bool isSignedInteger() const {
     return ScalarType == ScalarTypeKind::SignedInteger;
   }

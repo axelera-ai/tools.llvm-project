@@ -124,6 +124,19 @@ ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
   llvm_unreachable("Unhandled IntrinsicKind");
 }
 
+/// The Zvvm/IME OFP8 vector type of the given format, element count, and NF.
+/// These share the unsigned char element type with vuint8, so they cannot be
+/// found through ASTContext::getScalableVectorType.
+static QualType getRVVOFP8VectorType(ASTContext &Context, bool IsE5M2,
+                                     unsigned NumElts, unsigned NumFields) {
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF,        \
+                             IsE5M2Ty)                                         \
+  if (IsE5M2 == IsE5M2Ty && NumElts == NumEls && NumFields == NF)              \
+    return Context.SingletonId;
+#include "clang/Basic/RISCVVTypes.def"
+  llvm_unreachable("Unhandled OFP8 vector type");
+}
+
 static QualType RVVType2Qual(ASTContext &Context, const RVVType *Type) {
   QualType QT;
   switch (Type->getScalarType()) {
@@ -154,6 +167,21 @@ static QualType RVVType2Qual(ASTContext &Context, const RVVType *Type) {
   case ScalarTypeKind::FloatE4M3:
   case ScalarTypeKind::FloatE5M2:
     QT = Context.getIntTypeForBitwidth(8, false);
+    break;
+  case ScalarTypeKind::OFP8E4M3:
+  case ScalarTypeKind::OFP8E5M2:
+    if (Type->isVector()) {
+      QT = getRVVOFP8VectorType(
+          Context, Type->getScalarType() == ScalarTypeKind::OFP8E5M2,
+          *Type->getScale(), Type->isTuple() ? Type->getNF() : 1);
+      if (Type->isConstant())
+        QT = Context.getConstType(QT);
+      if (Type->isPointer())
+        QT = Context.getPointerType(QT);
+      return QT;
+    }
+    // No OFP8 scalar C type: OFP8 scalars and pointees are uint8_t.
+    QT = Context.UnsignedCharTy;
     break;
   case ScalarTypeKind::BFloat:
     QT = Context.BFloat16Ty;
@@ -1565,6 +1593,17 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
   return false;
 }
 
+static bool isRVVOFP8Type(const BuiltinType *BT) {
+  switch (BT->getKind()) {
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF, IsE5M2) \
+  case BuiltinType::Id:                                                        \
+    return true;
+#include "clang/Basic/RISCVVTypes.def"
+  default:
+    return false;
+  }
+}
+
 void SemaRISCV::checkRVVTypeSupport(QualType Ty, SourceLocation Loc, Decl *D,
                                     const llvm::StringMap<bool> &FeatureMap) {
   ASTContext::BuiltinVectorTypeInfo Info =
@@ -1604,6 +1643,17 @@ void SemaRISCV::checkRVVTypeSupport(QualType Ty, SourceLocation Loc, Decl *D,
   else if (Info.ElementType->isSpecificBuiltinType(BuiltinType::Float) &&
            !FeatureMap.lookup("zve32f"))
     Diag(Loc, diag::err_riscv_type_requires_extension) << Ty << "zve32f";
+  // Zvvm/IME OFP8 vector types (an i8 container, so the integer rules above
+  // already applied): available with any extension that produces or consumes
+  // OFP8 vector data -- the Zvvfmm MAC family (implied by every OFP8 per-type
+  // and MX IME extension), the Zvvm tile loads/stores, or Zvfofp8min.
+  else if (isRVVOFP8Type(Ty->castAs<BuiltinType>()) &&
+           !FeatureMap.lookup("experimental-zvvfmm") &&
+           !FeatureMap.lookup("experimental-zvvmtls") &&
+           !FeatureMap.lookup("experimental-zvvmttls") &&
+           !FeatureMap.lookup("experimental-zvfofp8min"))
+    Diag(Loc, diag::err_riscv_type_requires_extension)
+        << Ty << "zvvfmm, zvvmtls, zvvmttls or zvfofp8min";
   // Given that caller already checked isRVVType() before calling this function,
   // if we don't have at least zve32x supported, then we need to emit error.
   else if (!FeatureMap.lookup("zve32x"))

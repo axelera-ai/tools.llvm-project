@@ -34,6 +34,13 @@
 //     (S ∈ {8,16,32,64} ≥ logical width) for packed narrow tiles.
 //     Non-ISO element types (bf16, OFP8, OFP4, int4) are deferred with the
 //     MX/format phase.
+//   * OFP8 vector types: vfloat8e4m3{mf8..m8,m16}_t / vfloat8e5m2{...}_t
+//     exist (TypeRange chars "g" = E4M3 and "h" = E5M2, short-name tokens
+//     f8e4m3 / f8e5m2, i8 container in IR; see riscv_vector_common.td for
+//     the transformer rules, incl. "(OFP8:E4M3)v" to reach them from a wider
+//     base type). The generic RVV utilities (vget/vset/vcreate/vundefined/
+//     vlmul_ext/vlmul_trunc/vreinterpret) cover them in riscv_vector.td; here
+//     only the m16 pair/unpair. OFP8 tile L/S and MAC builtins are pending.
 //   * Overloaded short forms (spec §"Overloaded short forms"): every MAC is
 //     reachable as `__riscv_{mnemonic}_vv` (argument types select the cell,
 //     including sign combos and m16); pair/unpair as `__riscv_ime_vpair` /
@@ -455,6 +462,8 @@ defvar ZvvmM16PairElts = [
   ["f", "f32",  "v",  "experimental-zvvfmm"],
   ["d", "f64",  "v",  "experimental-zvvfmm"],
   ["y", "bf16", "v",  "experimental-zvvfmm"],
+  ["g", "f8e4m3", "v", "experimental-zvvfmm"],
+  ["h", "f8e5m2", "v", "experimental-zvvfmm"],
 ];
 
 foreach elt = ZvvmM16PairElts in {
