@@ -5,6 +5,8 @@
 // RUN:   -target-feature +experimental-zvvfp32mm \
 // RUN:   -target-feature +experimental-zvvfp16fp64mm \
 // RUN:   -target-feature +experimental-zvvxni8fp16mm \
+// RUN:   -target-feature +zvfbfmin -target-feature +experimental-zvvofp8fp16mm \
+// RUN:   -target-feature +experimental-zvvofp8bf16mm -target-feature +experimental-zvvofp8fp32mm \
 // RUN:   -target-feature +experimental-zvvmtls \
 // RUN:   -target-feature +experimental-zvvmttls \
 // RUN:   -O2 -emit-llvm %s -o - | FileCheck %s
@@ -79,6 +81,31 @@ vfloat32m1_t test_fmac_short(vfloat32m1_t vd, vfloat32m1_t vs1,
 vfloat64m2_t test_fqmac_short(vfloat64m2_t vd, vfloat16m1_t vs1,
                               vfloat16m1_t vs2, size_t vl) {
   return __riscv_vfqmmacc_vv(vd, vs1, vs2, vl);
+}
+
+// OFP8-input MACs: the OFP8 vs1/vs2 types select the input-format cell (no
+// `_f8e4m3m{N}` token in user code). These are the two calls of the IME
+// FlashAttention kernel: a BF16 score tile (EMUL_C=1, LMUL=4) and an FP32
+// output tile (EMUL_C=2, LMUL=4); then a mixed-format cell.
+// CHECK-LABEL: define dso_local <vscale x 4 x bfloat> @test_fwmac_ofp8_bf16_short
+// CHECK:         call <vscale x 4 x bfloat> @llvm.riscv.vfwmmacc.nxv4bf16.nxv32i8.i64(<vscale x 4 x bfloat> %{{.*}}, <vscale x 32 x i8> %{{.*}}, <vscale x 32 x i8> %{{.*}}, i64 %{{.*}})
+vbfloat16m1_t test_fwmac_ofp8_bf16_short(vbfloat16m1_t vd, vfloat8e4m3m4_t vs1,
+                                         vfloat8e4m3m4_t vs2, size_t vl) {
+  return __riscv_vfwmmacc_vv(vd, vs1, vs2, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 4 x float> @test_fqmac_ofp8_short
+// CHECK:         call <vscale x 4 x float> @llvm.riscv.vfqmmacc.nxv4f32.nxv32i8.i64(<vscale x 4 x float> %{{.*}}, <vscale x 32 x i8> %{{.*}}, <vscale x 32 x i8> %{{.*}}, i64 %{{.*}})
+vfloat32m2_t test_fqmac_ofp8_short(vfloat32m2_t vd, vfloat8e4m3m4_t vs1,
+                                   vfloat8e4m3m4_t vs2, size_t vl) {
+  return __riscv_vfqmmacc_vv(vd, vs1, vs2, vl);
+}
+
+// CHECK-LABEL: define dso_local <vscale x 16 x half> @test_fwmac_ofp8_mixed_short
+// CHECK:         call <vscale x 16 x half> @llvm.riscv.vfwmmacc.nxv16f16.nxv8i8.i64(<vscale x 16 x half> %{{.*}}, <vscale x 8 x i8> %{{.*}}, <vscale x 8 x i8> %{{.*}}, i64 %{{.*}})
+vfloat16m4_t test_fwmac_ofp8_mixed_short(vfloat16m4_t vd, vfloat8e4m3m1_t vs1,
+                                         vfloat8e5m2m1_t vs2, size_t vl) {
+  return __riscv_vfwmmacc_vv(vd, vs1, vs2, vl);
 }
 
 // Integer-input MX MAC: `_bs{N}` stays in the short form; the bs immarg

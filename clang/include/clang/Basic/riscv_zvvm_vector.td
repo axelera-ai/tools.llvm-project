@@ -41,7 +41,8 @@
 //     the transformer rules, incl. "(OFP8:E4M3)v" to reach them from a wider
 //     base type). The generic RVV utilities (vget/vset/vcreate/vundefined/
 //     vlmul_ext/vlmul_trunc/vreinterpret) cover them in riscv_vector.td; here
-//     only the m16 pair/unpair. OFP8 tile L/S and MAC builtins are pending.
+//     only the m16 pair/unpair. OFP8 tile L/S (above) and OFP8-input MACs
+//     (vfmmacc/vfwmmacc/vfqmmacc/vf8wmmacc, see the MAC section) use them.
 //   * Overloaded short forms (spec §"Overloaded short forms"): every MAC is
 //     reachable as `__riscv_{mnemonic}_vv` (argument types select the cell,
 //     including sign combos and m16); pair/unpair as `__riscv_ime_vpair` /
@@ -319,9 +320,9 @@ defvar ZvvmIntMACSignCombos = [
 ];
 
 // Non-widening SEW rows: [TypeRange char, SEW digits] for the integer side
-// and [TypeRange char, C-type token] for the FP side. BF16 and OFP8
-// accumulator types are deferred (no Clang vector types / altfmt-driven —
-// they land with the MX / alternate-format work).
+// and [TypeRange char, C-type token] for the FP side. The OFP8-accumulator
+// vfmmacc cells live in the OFP8-input MAC section below; the BF16
+// accumulator (Zvvbf16mm) is still deferred.
 defvar ZvvmNonWideningIntMACSEWs = [
   ["c", "8",  "experimental-zvvi8mm"],
   ["s", "16", "experimental-zvvi16mm"],
@@ -534,8 +535,8 @@ foreach elt = ZvvmM16PairElts in {
 //
 // One name per (SEW(C), EEW) row: the type-suffix encodes the accumulator
 // type and EMUL_C; `_lm{N}` (N > 1) encodes the A/B LMUL. Rows with 4-bit
-// inputs (Int4 / OFP4) and OFP8 inputs are deferred — Clang has no vector
-// types for them yet (they land with the MX / alternate-format work).
+// inputs (Int4 / OFP4) are deferred — Clang has no vector types for them
+// yet. OFP8-input rows are in the OFP8-input MAC section below.
 //
 // Covered rows: [IR name, TypeRange char (C type), C-SEW digits, input EEW]
 // (FP rows carry the full C-type token instead of digits since they take no
@@ -545,7 +546,7 @@ foreach elt = ZvvmM16PairElts in {
 //   v8wmmacc (W=8): i64←i8
 //   vfwmmacc (W=2): f32←f16, f64←f32
 //   vfqmmacc (W=4): f64←f16
-// (vf8wmmacc's only rows are OFP4/OFP8-input — fully deferred.)
+// (vf8wmmacc's only rows are OFP4/OFP8-input: OFP8 below, OFP4 deferred.)
 defvar ZvvmIntWideningMACRows = [
   ["vwmmacc",  "s", "16", "8",  "experimental-zvvi8i16mm"],
   ["vwmmacc",  "i", "32", "16", "experimental-zvvi16i32mm"],
@@ -608,6 +609,140 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 }
 
 //===----------------------------------------------------------------------===//
+// OFP8-input FP MACs (Zvvofp8mm, Zvvofp8fp16mm, Zvvofp8bf16mm,
+// Zvvofp8fp32mm, Zvvofp8fp64mm): vfmmacc.vv (OFP8 accumulator), vfwmmacc.vv
+// (FP16 / BF16 accumulator), vfqmmacc.vv (FP32), vf8wmmacc.vv (FP64), over
+// the same EMUL_C × LMUL ∈ {1,2,4,8}² grid, for all four input-format
+// combinations E4M3×E4M3, E5M2×E5M2, E4M3×E5M2, E5M2×E4M3 (spec
+// §"Sub-word inputs": all four are covered by the row's single OFP8
+// extension and permitted on all four instructions).
+//
+// Naming (spec §"Intrinsic naming", MAC suffix order
+// `{type-suffix}[_{inputA}[_{inputB}]][_su|_us][_lm{N}]`):
+//   * A non-ISO input type is always named, as `_{type}m{LMUL}`, even for
+//     the altfmt=0 encoding: `__riscv_vfwmmacc_vv_f16m4_f8e4m3m1`,
+//     `__riscv_vfqmmacc_vv_f32m2_f8e5m2m1`.
+//   * Mixed formats (altfmt_A ≠ altfmt_B) name both inputs, A first:
+//     `__riscv_vfwmmacc_vv_f16m4_f8e4m3m1_f8e5m2m1`.
+//   * A BF16 accumulator is a non-default C type, named by its own token:
+//     `__riscv_vfwmmacc_vv_bf16m4_f8e4m3m1[_f8e5m2m1]`.
+//   * The input-type token carries the A/B register-group multiplier, so
+//     the LMUL > 1 cells are `..._f16m1_f8e4m3m4` with NO `_lm{N}`
+//     qualifier — the same reading as the integer-input MX MACs above
+//     (`_i8m{ab}`); `_lm{N}` is used only by names without an input token.
+//     `m1` is kept on the token at LMUL=1 (the `_lm1` omission rule applies
+//     to the qualifier, not to type tokens; the spec's own examples spell
+//     `_f8e4m3m1`).
+//   * vfmmacc.vv: the accumulator's OFP8 format is independent of both
+//     input formats (vtype.altfmt selects it, altfmt_A/B the inputs). When
+//     all three agree the input type IS the default for that accumulator,
+//     so the name is the bare type-suffix plus `_lm{N}`
+//     (`__riscv_vfmmacc_vv_f8e4m3m8`, as the spec spells it); otherwise the
+//     input token(s) follow: `__riscv_vfmmacc_vv_f8e4m3m1_f8e5m2m1` (A = B
+//     ≠ C) and `__riscv_vfmmacc_vv_f8e4m3m1_f8e4m3m1_f8e5m2m1` (mixed — the
+//     spec's three-token example).
+//
+// Semantics: E4M3 vs E5M2 per input is architecturally vtype.altfmt_A /
+// altfmt_B, and FP16 vs BF16 (or E4M3 vs E5M2 for an OFP8 accumulator) is
+// vtype.altfmt. The caller MUST program those bits via
+// __riscv_vsetvl_matrix (altfmt_a / altfmt_b arguments; the vsew/altfmt
+// pair for a BF16 / E5M2 accumulator) before the call. The builtins are a
+// type surface only, like the integer sign combos: every format combination
+// lowers to the same signless IR intrinsic (llvm.riscv.v{f,fw,fq,f8w}mmacc)
+// with the OFP8 inputs in their i8 IR container — the existing
+// (F16|F32|F64|I8 C, I8 A/B) ISel rows of RISCVInstrInfoZvvm.td. The BF16
+// accumulator is emitted with its own <vscale x N x bfloat> IR type (not an
+// f16 container), so the backend can program e16alt for it.
+//
+// Every cell also registers under the overloaded short form
+// `__riscv_{mnemonic}_vv`: the (vd, vs1, vs2) types fully determine the
+// accumulator type and EMUL_C, both input formats, and the LMUL.
+//
+// Prototype shape (one vector-type transformer per operand): each def is
+// based on the ACCUMULATOR type at Log2LMUL = abLog2; vd/ret pin EMUL_C via
+// `(S/SE/L FixedLog2LMUL:cLog2)v` and vs1/vs2 become OFP8 at the def's LMUL
+// via `(OFP8:E4M3)v` / `(OFP8:E5M2)v`. For vfmmacc the base is itself OFP8,
+// so an input of the accumulator's own format is plain `v` (the OFP8
+// transformer rejects a same-format request).
+//
+// Deferred: the EMUL_C = 16 (m16) OFP8 cells. Their vd is `(Tuple:2)v` at
+// an M8 base, so an input needs both an LMUL pin and (for widening rows, or
+// vfmmacc with a different input format) a format change on one operand —
+// the same combined-transformer blocker as the other widening m16 cells.
+// The OFP8 m16 pair/unpair and the m16 ISel rows already exist.
+//===----------------------------------------------------------------------===//
+
+// OFP8 input formats: [TypeRange char, type token, OFP8 transformer arg].
+defvar ZvvmOFP8Fmts = [
+  ["g", "f8e4m3", "E4M3"],
+  ["h", "f8e5m2", "E5M2"],
+];
+// Widening rows: [IR name, accumulator TypeRange char, accumulator token,
+//                 per-type extension].
+defvar ZvvmOFP8WideningMACRows = [
+  ["vfwmmacc",  "x", "f16",  "experimental-zvvofp8fp16mm"],
+  ["vfwmmacc",  "y", "bf16", "experimental-zvvofp8bf16mm"],
+  ["vfqmmacc",  "f", "f32",  "experimental-zvvofp8fp32mm"],
+  ["vf8wmmacc", "d", "f64",  "experimental-zvvofp8fp64mm"],
+];
+
+foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
+  foreach abLog2 = [0, 1, 2, 3] in {  // LMUL   ∈ {1,2,4,8}
+    defvar cdTfm  = ABLog2LMULTransformer<abLog2, cLog2>.Str;
+    defvar emul_c = !shl(1, cLog2);
+    defvar lmul   = !shl(1, abLog2);
+    defvar lmSuffix = !if(!eq(abLog2, 0), "", "_lm" # lmul);
+
+    foreach row = ZvvmOFP8WideningMACRows in {
+      foreach fa = ZvvmOFP8Fmts in {
+        foreach fb = ZvvmOFP8Fmts in {
+          defvar inToks = "_" # fa[1] # "m" # lmul
+                          # !if(!eq(fa[0], fb[0]), "",
+                                "_" # fb[1] # "m" # lmul);
+          let RequiredFeatures = [row[3]],
+              HasMasked = false,
+              UnMaskedPolicyScheme = NonePolicy,
+              Log2LMUL = [abLog2],
+              IntrinsicTypes = [-1, 1],
+              Name = row[0] # "_vv_" # row[2] # "m" # emul_c # inToks,
+              OverloadedName = row[0] # "_vv",
+              IRName = row[0] in
+            def : RVVBuiltin<"", cdTfm # "v" # cdTfm # "v"
+                                 # "(OFP8:" # fa[2] # ")v"
+                                 # "(OFP8:" # fb[2] # ")v", row[1]>;
+        }
+      }
+    }
+
+    // vfmmacc.vv, OFP8 accumulator (Zvvofp8mm): 2 accumulator formats × 4
+    // input combos.
+    foreach fc = ZvvmOFP8Fmts in {
+      foreach fa = ZvvmOFP8Fmts in {
+        foreach fb = ZvvmOFP8Fmts in {
+          defvar allSame = !and(!eq(fa[0], fc[0]), !eq(fb[0], fc[0]));
+          defvar inToks =
+              !cond(allSame: lmSuffix,
+                    !eq(fa[0], fb[0]): "_" # fa[1] # "m" # lmul,
+                    true: "_" # fa[1] # "m" # lmul # "_" # fb[1] # "m" # lmul);
+          defvar aProto = !if(!eq(fa[0], fc[0]), "v", "(OFP8:" # fa[2] # ")v");
+          defvar bProto = !if(!eq(fb[0], fc[0]), "v", "(OFP8:" # fb[2] # ")v");
+          let RequiredFeatures = ["experimental-zvvofp8mm"],
+              HasMasked = false,
+              UnMaskedPolicyScheme = NonePolicy,
+              Log2LMUL = [abLog2],
+              IntrinsicTypes = [-1, 1],
+              Name = "vfmmacc_vv_" # fc[1] # "m" # emul_c # inToks,
+              OverloadedName = "vfmmacc_vv",
+              IRName = "vfmmacc" in
+            def : RVVBuiltin<"", cdTfm # "v" # cdTfm # "v" # aProto # bProto,
+                             fc[0]>;
+        }
+      }
+    }
+  }
+}
+
+//===----------------------------------------------------------------------===//
 // Integer-input microscaled MACs: vfwimmacc.vv / vfqimmacc.vv /
 // vf8wimmacc.vv (MXINT8 inputs, FP accumulator; MX-only instructions —
 // their vm=1 encodings are vwmmacc/vqmmacc/v8wmmacc).
@@ -643,7 +778,8 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 //
 // The FP-input microscaled forms (vfwmmacc/vfqmmacc/vf8wmmacc with
 // v0.scale) have IR intrinsics and ISel but no C surface yet: every FP MX
-// row has OFP4/OFP8 inputs, which still lack Clang vector types. m16
+// row has OFP4/OFP8 inputs (the OFP8 vector types now exist; the `_scaled`
+// OFP8 C surface is a follow-up, OFP4 still lacks a type). m16
 // accumulator cells are likewise deferred (the m16 tuple vd and the
 // FixedSEW inputs cannot yet be spelled in one prototype).
 //===----------------------------------------------------------------------===//
