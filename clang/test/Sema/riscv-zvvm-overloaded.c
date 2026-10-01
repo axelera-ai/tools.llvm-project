@@ -48,3 +48,17 @@ vint32m1_t wrong_types_no_candidate(vint32m1_t vd, vint32m2_t vs1,
   // vs1/vs2 LMULs disagree: no cell matches.
   return __riscv_vmmacc_vv(vd, vs1, vs2, vl); // expected-error {{no matching function for call to '__riscv_vmmacc_vv'}} expected-note + {{candidate function not viable}}
 }
+
+// OFP8 masked tile loads have no short form: (vbool8_t, const uint8_t *) is
+// shared with the u8m1 cell, which keeps the short call resolving to u8m1.
+vfloat8e4m3m1_t ofp8_masked_load_short(vbool8_t mask, const uint8_t *base,
+                                       size_t ld, size_t vl) {
+  return __riscv_vmtl_v(mask, base, ld, vl); // expected-error {{returning '__rvv_uint8m1_t' from a function with incompatible result type 'vfloat8e4m3m1_t' (aka '__rvv_float8e4m3m1_t')}}
+}
+
+// Consequently no `_tu` short form for OFP8 loads either (the TA/_tu/_m
+// variants of one record share its OverloadedName); use the long name.
+vfloat8e4m3m1_t ofp8_tu_load_short(vfloat8e4m3m1_t pt, const uint8_t *base,
+                                   size_t ld, size_t vl) {
+  return __riscv_vmtl_v_tu(pt, base, ld, vl); // expected-error {{no matching function for call to '__riscv_vmtl_v_tu'}} expected-note + {{candidate function not viable}}
+}

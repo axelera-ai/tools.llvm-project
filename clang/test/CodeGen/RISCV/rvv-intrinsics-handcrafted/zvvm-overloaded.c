@@ -154,3 +154,28 @@ vint32m1_t test_tu_load_short(vint32m1_t passthru, const int32_t *base,
                               size_t ld, size_t vl) {
   return __riscv_vmttl_v_tu(passthru, base, ld, vl);
 }
+
+// OFP8 tile store: the value type selects the format (E4M3 vs E5M2) and the
+// pointer type the storage width (uint8_t = natural, uint16_t = _as_e16).
+// CHECK-LABEL: define dso_local void @test_ofp8_store_short
+// CHECK:         call void @llvm.riscv.vmts.nxv16i8.p0.i64(<vscale x 16 x i8> %{{.*}}, ptr %{{.*}}, i64 %{{.*}}, i64 %{{.*}})
+void test_ofp8_store_short(uint8_t *base, size_t ld, vfloat8e5m2m2_t v,
+                           size_t vl) {
+  __riscv_vmts_v(base, ld, v, vl);
+}
+
+// CHECK-LABEL: define dso_local void @test_ofp8_as_e16_store_short
+// CHECK:         bitcast <vscale x 8 x i8> %{{.*}} to <vscale x 4 x i16>
+// CHECK:         call void @llvm.riscv.vmts.nxv4i16.p0.i64(<vscale x 4 x i16> %{{.*}}, ptr %{{.*}}, i64 %{{.*}}, i64 %{{.*}})
+void test_ofp8_as_e16_store_short(uint16_t *base, size_t ld,
+                                  vfloat8e4m3m1_t v, size_t vl) {
+  __riscv_vmts_v(base, ld, v, vl);
+}
+
+// OFP8 masked transposing tile store.
+// CHECK-LABEL: define dso_local void @test_ofp8_masked_tstore_short
+// CHECK:         call void @llvm.riscv.vmtts.mask.nxv8i8.p0.i64(<vscale x 8 x i8> %{{.*}}, ptr %{{.*}}, i64 %{{.*}}, <vscale x 8 x i1> %{{.*}}, i64 %{{.*}})
+void test_ofp8_masked_tstore_short(vbool8_t mask, uint8_t *base, size_t ld,
+                                   vfloat8e4m3m1_t v, size_t vl) {
+  __riscv_vmtts_v(mask, base, ld, v, vl);
+}

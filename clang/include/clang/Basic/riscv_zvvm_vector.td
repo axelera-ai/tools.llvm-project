@@ -32,8 +32,9 @@
 //     {type-suffix}[_as_e{S}][_L{N}][_m]). The order-preserving pair
 //     additionally has the storage-width-qualified `_as_e{S}` forms
 //     (S ∈ {8,16,32,64} ≥ logical width) for packed narrow tiles.
-//     Non-ISO element types (bf16, OFP8, OFP4, int4) are deferred with the
-//     MX/format phase.
+//     OFP8 E4M3/E5M2 (f8e4m3/f8e5m2) tiles have the same surface (natural
+//     storage SEW=8, `const uint8_t *` base). bf16/OFP4/int4 tiles are
+//     deferred with the MX/format phase.
 //   * OFP8 vector types: vfloat8e4m3{mf8..m8,m16}_t / vfloat8e5m2{...}_t
 //     exist (TypeRange chars "g" = E4M3 and "h" = E5M2, short-name tokens
 //     f8e4m3 / f8e5m2, i8 container in IR; see riscv_vector_common.td for
@@ -696,7 +697,8 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 //===----------------------------------------------------------------------===//
 // Zvvmtls / Zvvmttls: tile load and store.
 //
-// Four mnemonics, each over TypeRange "csilxfd" at LMUL ∈ {1,2,4,8}:
+// Four mnemonics, each over TypeRange "csilxfd" (plus the unsigned rows and
+// the OFP8 "g"/"h" rows, see below) at LMUL ∈ {1,2,4,8}:
 //   vmtl.v  — order-preserving load  (Zvvmtls)
 //   vmts.v  — order-preserving store (Zvvmtls)
 //   vmttl.v — transposing load       (Zvvmttls)
@@ -716,6 +718,22 @@ foreach cLog2 = [0, 1, 2, 3] in {     // EMUL_C ∈ {1,2,4,8}
 //                                  size_t vl);
 //   void __riscv_vmts_v_i32m1_m   (vbool32_t mask, int32_t *base, size_t ld,
 //                                  vint32m1_t vs3, size_t vl);
+//
+// OFP8 (E4M3 = TypeRange "g", E5M2 = "h"): the natural storage width is 8,
+// so the unqualified forms run at SEW=8 and take a `const uint8_t *` /
+// `uint8_t *` base (spec: "OFP8 natural-storage order-preserving
+// load/store"; the transposing pair is defined for natural storage too):
+//   vfloat8e4m3m1_t __riscv_vmtl_v_f8e4m3m1(const uint8_t *base, size_t ld,
+//                                           size_t vl);
+//   void __riscv_vmts_v_f8e4m3m1(uint8_t *base, size_t ld,
+//                                vfloat8e4m3m1_t vs3, size_t vl);
+// In IR the OFP8 vectors are <vscale x N x i8>, so the i8 tile intrinsics
+// apply unchanged. OFP8 masked loads keep their long name as their only
+// spelling: `(vbool8_t, const uint8_t *, size_t, size_t)` is shared by the
+// u8m1, f8e4m3m1 and f8e5m2m1 masked loads, so joining the `vmtl_v` short
+// set would make the existing u8 short call ambiguous. (Their `_tu` siblings
+// consequently are `__riscv_vmtl_v_f8e4m3m1_tu` only: OverloadedName is
+// shared per record across the TA/_tu/_m variants.)
 //
 // The instruction encoding is element-type-agnostic — SEW lives in vtype —
 // so every element type maps to the same pseudo with the matching IR
@@ -760,6 +778,8 @@ defvar ZvvmTileTypeCells = [
   ["s", "u16", "UvPCUez", "0PUezUv"],
   ["i", "u32", "UvPCUez", "0PUezUv"],
   ["l", "u64", "UvPCUez", "0PUezUv"],
+  ["g", "f8e4m3", "vPCez", "0Pezv"],
+  ["h", "f8e5m2", "vPCez", "0Pezv"],
 ];
 defvar ZvvmTileLambdas = [1, 2, 4, 8, 16, 32, 64];
 
@@ -822,6 +842,29 @@ let HasMasked = true,
       def vmttl_v_u : RVVOutOp0Builtin<"Uv", "UvPCUez", "csil">;
   }
 
+  // OFP8 natural-storage default-lambda loads: one def per (format, LMUL)
+  // so OverloadedName can be the long name (see the masked-load note above).
+  foreach fmt = [["g", "f8e4m3"], ["h", "f8e5m2"]] in {
+    foreach l2 = [0, 1, 2, 3] in {
+      defvar tsuf = fmt[1] # "m" # !shl(1, l2);
+      let Log2LMUL = [l2] in {
+        let RequiredFeatures = ["experimental-zvvmtls"],
+            Name = "vmtl_v",
+            OverloadedName = "vmtl_v_" # tsuf,
+            IRName = "vmtl",
+            MaskedIRName = "vmtl_mask" in
+          def : RVVOutOp0Builtin<"v", "vPCez", fmt[0]>;
+
+        let RequiredFeatures = ["experimental-zvvmttls"],
+            Name = "vmttl_v",
+            OverloadedName = "vmttl_v_" # tsuf,
+            IRName = "vmttl",
+            MaskedIRName = "vmttl_mask" in
+          def : RVVOutOp0Builtin<"v", "vPCez", fmt[0]>;
+      }
+    }
+  }
+
   // Per-lambda `_L{N}` override variants: one fully-named def per
   // (type, LMUL, lambda) cell so `_L{N}` lands after the type suffix.
   foreach tp = ZvvmTileTypeCells in {
@@ -871,21 +914,22 @@ let HasMasked = true,
         }
       }
     }] in {
-  // Default-lambda forms.
+  // Default-lambda forms. The OFP8 "g"/"h" stores join the `vmts_v` /
+  // `vmtts_v` short sets: the value operand type is unique per cell.
   let Log2LMUL = [0, 1, 2, 3] in {
     let RequiredFeatures = ["experimental-zvvmtls"],
         Name = "vmts_v",
         OverloadedName = "vmts_v",
         IRName = "vmts",
         MaskedIRName = "vmts_mask" in
-      def vmts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+      def vmts_v : RVVBuiltin<"v", "0Pezv", "csilxfdgh">;
 
     let RequiredFeatures = ["experimental-zvvmttls"],
         Name = "vmtts_v",
         OverloadedName = "vmtts_v",
         IRName = "vmtts",
         MaskedIRName = "vmtts_mask" in
-      def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfd">;
+      def vmtts_v : RVVBuiltin<"v", "0Pezv", "csilxfdgh">;
 
     // Unsigned integer element types.
     let RequiredFeatures = ["experimental-zvvmtls"],
@@ -967,7 +1011,14 @@ let HasMasked = true,
 // NonePolicy): the spec defines none, and tile loads are architecturally
 // always tail/inactive-undisturbed anyway.
 //
-// Non-ISO logical types (bf16, OFP8, OFP4, int4) are deferred with the
+// OFP8 logical types are spelled `(OFP8:E4M3)v` / `(OFP8:E5M2)v` from the
+// storage base (SEW=8, LMUL kept), e.g. `__riscv_vmtl_v_f8e4m3m4_as_e32`
+// returns vfloat8e4m3m4_t from a `const uint32_t *`. `_as_e8` is the natural
+// width (spec: "`__riscv_vmtl_v_f8e4m3m1_as_e8` is equivalent to
+// `__riscv_vmtl_v_f8e4m3m1`"), so the e8 OFP8 store cells are aliases and
+// stay out of the short-form set like the other natural-width cells.
+//
+// Non-ISO logical types bf16, OFP4 and int4 are deferred with the
 // MX/format phase alongside their vector types.
 //===----------------------------------------------------------------------===//
 
@@ -1036,6 +1087,8 @@ class ZvvmAsEStoreCodegen<string sw> {
 // (logical token, logical-vector prototype from the storage base) cells per
 // storage width. `F`/`U` swap the scalar kind at the (FixedSEW-adjusted)
 // element width; natural-width cells omit FixedSEW.
+defvar ZvvmAsECellsOFP8 = [["f8e4m3", "(OFP8:E4M3)v"],
+                           ["f8e5m2", "(OFP8:E5M2)v"]];
 defvar ZvvmAsECells_e8  = [["i8", "v"], ["u8", "Uv"]];
 defvar ZvvmAsECells_e16 = [["i8",  "(FixedSEW:8)v"],  ["u8",  "(FixedSEW:8)Uv"],
                            ["i16", "v"],              ["u16", "Uv"],
@@ -1054,10 +1107,11 @@ defvar ZvvmAsECells_e64 = [["i8",  "(FixedSEW:8)v"],  ["u8",  "(FixedSEW:8)Uv"],
                            ["f64", "Fv"]];
 
 foreach st = [["c", "8"], ["s", "16"], ["i", "32"], ["l", "64"]] in {
-  defvar cells = !cond(!eq(st[1], "8")  : ZvvmAsECells_e8,
-                       !eq(st[1], "16") : ZvvmAsECells_e16,
-                       !eq(st[1], "32") : ZvvmAsECells_e32,
-                       true             : ZvvmAsECells_e64);
+  defvar cells = !listconcat(!cond(!eq(st[1], "8")  : ZvvmAsECells_e8,
+                                   !eq(st[1], "16") : ZvvmAsECells_e16,
+                                   !eq(st[1], "32") : ZvvmAsECells_e32,
+                                   true             : ZvvmAsECells_e64),
+                             ZvvmAsECellsOFP8);
 
   // Loads.
   let HasMasked = true,
@@ -1107,7 +1161,9 @@ foreach st = [["c", "8"], ["s", "16"], ["i", "32"], ["l", "64"]] in {
         // would contain duplicate signatures and every such call would be
         // ambiguous.
         defvar isNaturalW = !or(!eq(cell[1], "v"), !eq(cell[1], "Uv"),
-                                !eq(cell[1], "Fv"));
+                                !eq(cell[1], "Fv"),
+                                !and(!eq(st[1], "8"),
+                                     !ne(!find(cell[1], "OFP8"), -1)));
         let Log2LMUL = [l2] in {
           let Name = "vmts_v_" # tsuf,
               OverloadedName = !if(isNaturalW, "vmts_v_" # tsuf, "vmts_v"),
