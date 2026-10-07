@@ -438,5 +438,31 @@ struct RISCVMaskedPseudoInfo {
 #include "RISCVGenSearchableTables.inc"
 } // end namespace RISCV
 
+// Zvvm matrix pseudos → BaseInstr + Kind lookup. Populated by
+// RISCVMatrixPseudosTable (see RISCVInstrInfoZvvm.td); consumed by the
+// MC-lowering helper in RISCVAsmPrinter.cpp. Kind values match the
+// RISCVMatrixPseudo class in the .td.
+namespace RISCVMatrixPseudosTable {
+
+enum MatrixPseudoKind : uint8_t {
+  MAC = 0,
+  TileLoad = 1,
+  TileLoadMask = 2,
+  TileStore = 3,
+  TileStoreMask = 4,
+  MACScaled = 5,
+};
+
+struct MatrixPseudoInfo {
+  uint16_t Pseudo;
+  uint16_t BaseInstr;
+  uint8_t Kind;
+};
+
+#define GET_RISCVMatrixPseudosTable_DECL
+#include "RISCVGenSearchableTables.inc"
+
+} // end namespace RISCVMatrixPseudosTable
+
 } // end namespace llvm
 #endif

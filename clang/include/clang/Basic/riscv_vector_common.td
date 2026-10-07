@@ -42,6 +42,13 @@
 //   f: float32_t (float)
 //   d: float64_t (double)
 //   y: bfloat16_t (bfloat16)
+//   a: OFP8 E4M3, Zvfofp8min flavour (C vector types are vuint8*_t)
+//   b: OFP8 E5M2, Zvfofp8min flavour (C vector types are vuint8*_t)
+//   g: OFP8 E4M3, Zvvm/IME flavour: the distinct vfloat8e4m3*_t types (i8
+//      container in IR; "e" yields uint8_t, there is no OFP8 scalar type).
+//      Short-name token "f8e4m3".
+//   h: OFP8 E5M2, Zvvm/IME flavour: vfloat8e5m2*_t, as for "g". Short-name
+//      token "f8e5m2".
 //
 // This way, given an LMUL, a record with a TypeRange "sil" will cause the
 // definition of 3 builtins. Each type "t" in the TypeRange (in this example
@@ -110,6 +117,15 @@
 //      and LMUL), and computes another vector type which only changed LMUL as
 //      given value. The new LMUL should be larger than the old one. Ignore to
 //      define a new builtin if its equivalent type has illegal lmul.
+//   (OFP8:E4M3) / (OFP8:E5M2): Given a vector type (any SEW, LMUL), computes
+//      the Zvvm/IME OFP8 vector type of that format (SEW=8) at the same LMUL,
+//      e.g. "(OFP8:E4M3)v" on "x" at LMUL=1 is vfloat8e4m3m1_t. Ignore to
+//      define a new builtin if the type is already of that format.
+//
+// For the OFP8 types "g"/"h": "Uv"/"Iv" yield the vuint8/vint8 type of the
+// same LMUL, "(FixedSEW:N)Uv" the vuint<N> type of the same LMUL, while
+// "w"/"q"/"o" and "(FixedSEW:N)v" are invalid (OFP8 exists only at SEW=8).
+// Only the m16 tuple shape ("(Tuple:2)v" at LMUL=8) is valid for OFP8.
 //
 // Following with the example above, if t is "i", then "Ue" will yield unsigned
 // int and "Fv" will yield __rvv_float32m1_t (again assuming LMUL=1), Fw would

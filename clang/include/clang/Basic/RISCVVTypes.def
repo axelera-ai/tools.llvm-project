@@ -39,6 +39,16 @@
 //
 // - IsFP is true for vectors of floating-point elements.
 //
+// - RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF, IsE5M2)
+//   An IME (Zvvm) OFP8 vector (vfloat8e4m3*_t / vfloat8e5m2*_t). LLVM IR has
+//   no FP8 element type, so these use an i8 container (<vscale x N x i8>) and
+//   report `unsigned char` as their element type, but they are distinct C
+//   types. By default they expand to RVV_VECTOR_TYPE with IsSigned, IsFP and
+//   IsBF all false; consumers that look types up by element type (e.g.
+//   ASTContext::getScalableVectorType) or that enable fixed-length (VLS)
+//   forms must define this macro to exclude them, otherwise an OFP8 type
+//   would alias the matching vuint8 type.
+//
 //===----------------------------------------------------------------------===//
 
 #ifndef RVV_TYPE
@@ -71,6 +81,13 @@
 #ifndef RVV_VECTOR_TYPE_BFLOAT
 #define RVV_VECTOR_TYPE_BFLOAT(Name, Id, SingletonId, NumEls, ElBits, NF)      \
   RVV_VECTOR_TYPE(Name, Id, SingletonId, NumEls, ElBits, NF, false, false, true)
+#endif
+
+#ifndef RVV_VECTOR_TYPE_OFP8
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF,        \
+                             IsE5M2)                                           \
+  RVV_VECTOR_TYPE(Name, Id, SingletonId, NumEls, ElBits, NF, false, false,     \
+                  false)
 #endif
 
 //===- Vector types -------------------------------------------------------===//
@@ -508,6 +525,73 @@ RVV_VECTOR_TYPE_BFLOAT("__rvv_bfloat16m2x4_t", RvvBFloat16m2x4, RvvBFloat16m2x4T
 RVV_VECTOR_TYPE_BFLOAT("__rvv_bfloat16m4x2_t", RvvBFloat16m4x2, RvvBFloat16m4x2Ty,
                        16, 16, 2)
 
+//===- IME (Zvvm) m16 accumulator types ----------------------------------===//
+// EMUL_C = 16 accumulator register groups: a 16-register-aligned pair of M8
+// groups (NF=2 at LMUL=8), outside the Zvlsseg NF x LMUL <= 8 domain. These
+// are IME-only types (spec: "IME-only m16 accumulator types"); they are not
+// valid operands of ordinary RVV intrinsics, and no m8x2 segment types exist,
+// so the (element, NumEls, NF) lookup in getScalableVectorType is unambiguous.
+RVV_VECTOR_TYPE_INT("__rvv_int8m16_t",  RvvInt8m16,  RvvInt8m16Ty,  64, 8,  2, true)
+RVV_VECTOR_TYPE_INT("__rvv_int16m16_t", RvvInt16m16, RvvInt16m16Ty, 32, 16, 2, true)
+RVV_VECTOR_TYPE_INT("__rvv_int32m16_t", RvvInt32m16, RvvInt32m16Ty, 16, 32, 2, true)
+RVV_VECTOR_TYPE_INT("__rvv_int64m16_t", RvvInt64m16, RvvInt64m16Ty, 8,  64, 2, true)
+
+RVV_VECTOR_TYPE_INT("__rvv_uint8m16_t",  RvvUint8m16,  RvvUint8m16Ty,  64, 8,  2, false)
+RVV_VECTOR_TYPE_INT("__rvv_uint16m16_t", RvvUint16m16, RvvUint16m16Ty, 32, 16, 2, false)
+RVV_VECTOR_TYPE_INT("__rvv_uint32m16_t", RvvUint32m16, RvvUint32m16Ty, 16, 32, 2, false)
+RVV_VECTOR_TYPE_INT("__rvv_uint64m16_t", RvvUint64m16, RvvUint64m16Ty, 8,  64, 2, false)
+
+RVV_VECTOR_TYPE_FLOAT("__rvv_float16m16_t", RvvFloat16m16, RvvFloat16m16Ty, 32, 16, 2)
+RVV_VECTOR_TYPE_FLOAT("__rvv_float32m16_t", RvvFloat32m16, RvvFloat32m16Ty, 16, 32, 2)
+RVV_VECTOR_TYPE_FLOAT("__rvv_float64m16_t", RvvFloat64m16, RvvFloat64m16Ty, 8,  64, 2)
+
+RVV_VECTOR_TYPE_BFLOAT("__rvv_bfloat16m16_t", RvvBFloat16m16, RvvBFloat16m16Ty,
+                       32, 16, 2)
+
+//===- IME (Zvvm) OFP8 vector types ---------------------------------------===//
+// The OFP8 vector types vfloat8e4m3mX_t (E4M3) and vfloat8e5m2mX_t (E5M2) are
+// implementation-defined extensions following the V intrinsics naming
+// convention for non-ISO types (IME spec §"Floating-point matrix
+// multiply-accumulate (Zvvfmm)"), analogous to vbfloat16mX_t. They cover the
+// ordinary LMULs mf8..m8 plus the IME-only m16 accumulator (NF=2 at LMUL=8,
+// see above). No segment-tuple (mXxN) forms are defined: no Zvvm or RVV
+// intrinsic consumes them. The element storage is an i8 container.
+
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3mf8_t", RvvFloat8E4M3mf8, RvvFloat8E4M3mf8Ty,
+                     1, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3mf4_t", RvvFloat8E4M3mf4, RvvFloat8E4M3mf4Ty,
+                     2, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3mf2_t", RvvFloat8E4M3mf2, RvvFloat8E4M3mf2Ty,
+                     4, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3m1_t", RvvFloat8E4M3m1, RvvFloat8E4M3m1Ty,
+                     8, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3m2_t", RvvFloat8E4M3m2, RvvFloat8E4M3m2Ty,
+                     16, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3m4_t", RvvFloat8E4M3m4, RvvFloat8E4M3m4Ty,
+                     32, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3m8_t", RvvFloat8E4M3m8, RvvFloat8E4M3m8Ty,
+                     64, 8, 1, false)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e4m3m16_t", RvvFloat8E4M3m16, RvvFloat8E4M3m16Ty,
+                     64, 8, 2, false)
+
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2mf8_t", RvvFloat8E5M2mf8, RvvFloat8E5M2mf8Ty,
+                     1, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2mf4_t", RvvFloat8E5M2mf4, RvvFloat8E5M2mf4Ty,
+                     2, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2mf2_t", RvvFloat8E5M2mf2, RvvFloat8E5M2mf2Ty,
+                     4, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2m1_t", RvvFloat8E5M2m1, RvvFloat8E5M2m1Ty,
+                     8, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2m2_t", RvvFloat8E5M2m2, RvvFloat8E5M2m2Ty,
+                     16, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2m4_t", RvvFloat8E5M2m4, RvvFloat8E5M2m4Ty,
+                     32, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2m8_t", RvvFloat8E5M2m8, RvvFloat8E5M2m8Ty,
+                     64, 8, 1, true)
+RVV_VECTOR_TYPE_OFP8("__rvv_float8e5m2m16_t", RvvFloat8E5M2m16, RvvFloat8E5M2m16Ty,
+                     64, 8, 2, true)
+
+#undef RVV_VECTOR_TYPE_OFP8
 #undef RVV_VECTOR_TYPE_BFLOAT
 #undef RVV_VECTOR_TYPE_FLOAT
 #undef RVV_VECTOR_TYPE_INT

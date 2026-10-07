@@ -84,6 +84,7 @@ def isVectorConfigInstr
                        PseudoVSETVLIX0,
                        PseudoVSETVLIX0X0,
                        PseudoVSETIVLI,
+                       PseudoVSETVL_MATRIX,
                        PseudoSF_VSETTNT,
                        PseudoSF_VSETTNTX0,
                        PseudoSF_VSETTNTX0X0

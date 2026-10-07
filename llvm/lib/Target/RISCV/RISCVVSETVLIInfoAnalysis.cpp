@@ -320,12 +320,33 @@ DemandedFields getDemanded(const MachineInstr &MI, const RISCVSubtarget *ST) {
   Res.TWiden = RISCVII::hasTWidenOp(MI.getDesc().TSFlags) ||
                RISCVInstrInfo::isXSfmmVectorConfigInstr(MI);
 
+  // Note: Zvvm matrix instructions don't add their matrix fields to the
+  // demand set here. Doing so would force needVSETVLI to fire when the
+  // per-instruction computeInfoForInstr (which has Lambda/Bs/AltFmt{A,B} = 0
+  // by default) is compared against the current matrix state. The matrix
+  // fields are instead preserved across vtype writes by the emission path
+  // (insertVSETVLI routes through PseudoVSETVL_MATRIX whenever the running
+  // VSETVLIInfo has non-default matrix state).
+
   return Res;
 }
 
 bool VSETVLIInfo::hasCompatibleVTYPE(const DemandedFields &Used,
                                      const VSETVLIInfo &Require) const {
-  return areCompatibleVTYPEs(Require.encodeVTYPE(), encodeVTYPE(), Used);
+  if (!areCompatibleVTYPEs(Require.encodeVTYPE(), encodeVTYPE(), Used))
+    return false;
+  // The Zvvm matrix vtype fields (lambda / bs / altfmt_A / altfmt_B) sit at
+  // the high end of vtype and are not part of the 11-bit immediate encoded
+  // by encodeVTYPE(). Compare them directly when demanded.
+  if (Used.Lambda && Require.getLambda() != getLambda())
+    return false;
+  if (Used.Bs && Require.getBs() != getBs())
+    return false;
+  if (Used.AltFmtA && Require.getAltFmtA() != getAltFmtA())
+    return false;
+  if (Used.AltFmtB && Require.getAltFmtB() != getAltFmtB())
+    return false;
+  return true;
 }
 
 // If the AVL is defined by a vsetvli's output vl with the same VLMAX, we can
@@ -367,6 +388,26 @@ RISCVVSETVLIInfoAnalysis::getInfoForVSETVLI(const MachineInstr &MI) const {
       NewInfo.setAVLRegDef(getVNInfoFromReg(ATNReg, MI, LIS), ATNReg);
       break;
     }
+  } else if (MI.getOpcode() == RISCV::PseudoVSETVL_MATRIX) {
+    // Zvvm register-form vsetvl carries the full XLen-wide vtype as an
+    // immediate; AVL comes from operand 1.
+    //
+    // The tracked lambda is the *requested* encoding from the immediate:
+    // per the IME spec, hardware WARL-canonicalizes an unsupported nonzero
+    // request to the largest supported value <= the request (or the
+    // smallest supported one when none is), and treats a zero request as
+    // preserve-or-initialize. Tracking the request is sound because
+    // canonicalization is a deterministic function of (request, VLEN, SEW)
+    // — equal tracked states arise from equal emitted requests and thus
+    // equal hardware states — and the pass never derives a specific
+    // hardware lambda from a tracked value of 0.
+    Register AVLReg = MI.getOperand(1).getReg();
+    VNInfo *VNI = getVNInfoFromReg(AVLReg, MI, LIS);
+    NewInfo.setAVLRegDef(VNI, AVLReg);
+    NewInfo.setMatrixVTYPE(static_cast<uint64_t>(MI.getOperand(2).getImm()),
+                           ST->getXLen());
+    forwardVSETVLIAVL(NewInfo);
+    return NewInfo;
   } else {
     assert(MI.getOpcode() == RISCV::PseudoVSETVLI ||
            MI.getOpcode() == RISCV::PseudoVSETVLIX0);
@@ -495,6 +536,43 @@ RISCVVSETVLIInfoAnalysis::computeInfoForInstr(const MachineInstr &MI) const {
 
   forwardVSETVLIAVL(InstrInfo);
 
+  return InstrInfo;
+}
+
+bool isZvvmAltFmtMAC(const MachineInstr &MI) {
+  if (RISCVII::getAltFmtType(MI.getDesc().TSFlags) ==
+      RISCVII::AltFmtType::DontCare)
+    return false;
+  const auto *Info =
+      RISCVMatrixPseudosTable::getMatrixPseudoInfo(MI.getOpcode());
+  return Info && (Info->Kind == RISCVMatrixPseudosTable::MAC ||
+                  Info->Kind == RISCVMatrixPseudosTable::MACScaled);
+}
+
+VSETVLIInfo
+RISCVVSETVLIInfoAnalysis::computeInfoForZvvmMAC(const MachineInstr &MI) const {
+  assert(isZvvmAltFmtMAC(MI) && "Expected a Zvvm FP matrix MAC");
+  const uint64_t TSFlags = MI.getDesc().TSFlags;
+  // Operand layout: ..., $vl, $sew (the last two explicit operands).
+  unsigned NumOps = MI.getNumExplicitOperands();
+  const MachineOperand &VLOp = MI.getOperand(NumOps - 2);
+  unsigned Log2SEW = MI.getOperand(NumOps - 1).getImm();
+  unsigned SEW = 1 << Log2SEW;
+  assert(RISCVVType::isValidSEW(SEW) && "Unexpected SEW");
+
+  VSETVLIInfo InstrInfo;
+  Register AVLReg = VLOp.getReg();
+  InstrInfo.setAVLRegDef(getVNInfoFromReg(AVLReg, MI, LIS), AVLReg);
+  // Tail-undisturbed is a valid implementation of whatever tail policy the
+  // caller programmed, so it is the safe choice when the incoming vtype is
+  // unknown. The MACs are never masked, so (as for any RVV pseudo without a
+  // mask policy) mask-agnostic is used.
+  InstrInfo.setVTYPE(RISCVII::getLMul(TSFlags), SEW, /*TA=*/false,
+                     /*MA=*/true,
+                     RISCVII::getAltFmtType(TSFlags) ==
+                         RISCVII::AltFmtType::AltFmt,
+                     /*TWiden=*/0);
+  forwardVSETVLIAVL(InstrInfo);
   return InstrInfo;
 }
 } // namespace RISCV

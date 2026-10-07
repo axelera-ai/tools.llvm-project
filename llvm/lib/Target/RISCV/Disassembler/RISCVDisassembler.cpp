@@ -583,6 +583,14 @@ static DecodeStatus decodeFRMArg(MCInst &Inst, uint32_t Imm, int64_t Address,
   return MCDisassembler::Success;
 }
 
+static DecodeStatus decodeLambdaArg(MCInst &Inst, uint32_t Imm, int64_t Address,
+                                    const MCDisassembler *Decoder) {
+  // Zvvm tile lambda override. All eight 3-bit values are valid encodings.
+  assert(isUInt<3>(Imm) && "Invalid immediate");
+  Inst.addOperand(MCOperand::createImm(Imm));
+  return MCDisassembler::Success;
+}
+
 static DecodeStatus decodeRTZArg(MCInst &Inst, uint32_t Imm, int64_t Address,
                                  const MCDisassembler *Decoder) {
   assert(isUInt<3>(Imm) && "Invalid immediate");

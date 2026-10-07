@@ -152,6 +152,10 @@ static BasicType ParseBasicType(char c) {
     return BasicType::F8E4M3;
   case 'b':
     return BasicType::F8E5M2;
+  case 'g':
+    return BasicType::OFP8E4M3;
+  case 'h':
+    return BasicType::OFP8E5M2;
   default:
     return BasicType::Unknown;
   }
@@ -494,6 +498,21 @@ void RVVEmitter::createHeader(raw_ostream &OS) {
           printType(*TupleT);
       }
     }
+  }
+
+  // Zvvm/IME OFP8 vector types: mf8..m8 plus the m16 accumulator (no
+  // segment tuples; computeType rejects them).
+  for (BasicType BT : {BasicType::OFP8E4M3, BasicType::OFP8E5M2}) {
+    for (int Log2LMUL : Log2LMULs) {
+      auto T = TypeCache.computeType(BT, Log2LMUL, PrototypeDescriptor::Vector);
+      if (T)
+        printType(*T);
+    }
+    auto M16T = TypeCache.computeType(
+        BT, /*Log2LMUL=*/3,
+        PrototypeDescriptor(BaseTypeModifier::Vector, getTupleVTM(2)));
+    if (M16T)
+      printType(*M16T);
   }
 
   OS << "\n#ifdef __cplusplus\n";
