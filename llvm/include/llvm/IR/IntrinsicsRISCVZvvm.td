@@ -90,6 +90,32 @@ let TargetPrefix = "riscv" in {
                                ImmArg<ArgIndex<7>>, ImmArg<ArgIndex<8>>]>;
 
   //===--------------------------------------------------------------------===//
+  // The plain vsetvli / vsetvlimax as seen by the matrix vtype state. Same
+  // operands and lowering as int_riscv_vsetvli / int_riscv_vsetvlimax, but
+  // modelled as a write of the matrix vtype state: a vsetvli changes the SEW
+  // that a following vsetlambda request is canonicalized against, so the
+  // sequence `__riscv_vsetvl_e16m4(vl); __riscv_vsetlambda(16);` only means
+  // what the programmer wrote if the vsetvli survives with its result unused
+  // and keeps its place before the lambda write. int_riscv_vsetvli cannot
+  // provide that (it is IntrNoMem, and InsertVSETVLI re-derives SEW / LMUL for
+  // every RVV instruction from its operands), so Clang emits these variants
+  // instead whenever a Zvvm family extension is enabled.
+  //===--------------------------------------------------------------------===//
+  def int_riscv_vsetvli_zvvm : DefaultAttrsIntrinsic<[llvm_anyint_ty],
+                               /* AVL */  [LLVMMatchType<0>,
+                               /* VSEW */  LLVMMatchType<0>,
+                               /* VLMUL */ LLVMMatchType<0>],
+                                          [IntrInaccessibleMemOnly,
+                                           ImmArg<ArgIndex<1>>,
+                                           ImmArg<ArgIndex<2>>]>;
+  def int_riscv_vsetvlimax_zvvm : DefaultAttrsIntrinsic<[llvm_anyint_ty],
+                                  /* VSEW */ [LLVMMatchType<0>,
+                                  /* VLMUL */ LLVMMatchType<0>],
+                                          [IntrInaccessibleMemOnly,
+                                           ImmArg<ArgIndex<0>>,
+                                           ImmArg<ArgIndex<1>>]>;
+
+  //===--------------------------------------------------------------------===//
   // Targeted lambda primitives. These complement int_riscv_vsetvl_matrix for
   // the common case where software wants to establish (or read) only the
   // matrix `lambda` field of `vtype` without re-specifying the other vtype

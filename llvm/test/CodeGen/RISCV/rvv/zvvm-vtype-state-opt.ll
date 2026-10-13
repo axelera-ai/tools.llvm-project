@@ -7,9 +7,11 @@
 ; MACs and query_lambda `memory(inaccessiblemem: read)`, tile loads
 ; `memory(argmem: read, inaccessiblemem: read)` and tile stores
 ; `memory(argmem: write, inaccessiblemem: read)`. Ordinary RVV intrinsics
-; (including llvm.riscv.vsetvli) stay `memory(none)`.
+; (including llvm.riscv.vsetvli) stay `memory(none)`; the vsetvli Clang emits
+; under a Zvvm extension is llvm.riscv.vsetvli.zvvm, a state writer.
 
 declare i64 @llvm.riscv.vsetvli.i64(i64, i64 immarg, i64 immarg)
+declare i64 @llvm.riscv.vsetvli.zvvm.i64(i64, i64 immarg, i64 immarg)
 declare i64 @llvm.riscv.vsetlambda.i64(i64)
 declare i64 @llvm.riscv.query.lambda.i64()
 declare i64 @llvm.riscv.vsetvl.matrix.i64(i64, i64 immarg, i64 immarg,
@@ -23,8 +25,8 @@ declare <vscale x 2 x i32> @llvm.riscv.vmtl.nxv2i32.p0.i64(
 declare void @llvm.riscv.vmts.nxv2i32.p0.i64(
   <vscale x 2 x i32>, ptr, i64, i64)
 
-; Reproducer: `__riscv_vsetvl_e16m4(1024); (void)__riscv_vsetlambda(16);`.
-; The unused vsetvli folds away; the lambda writes must not.
+; A plain llvm.riscv.vsetvli with an unused result folds away; the lambda
+; writes must not.
 define void @unused_write() {
 ; CHECK-LABEL: define void @unused_write(
 ; CHECK-SAME: ) local_unnamed_addr #[[ATTR5:[0-9]+]] {
@@ -36,6 +38,21 @@ define void @unused_write() {
   %r = call i64 @llvm.riscv.vsetlambda.i64(i64 5)
   %m = call i64 @llvm.riscv.vsetvl.matrix.i64(i64 1024, i64 1, i64 2,
   i64 1, i64 1, i64 5, i64 0, i64 0, i64 0)
+  ret void
+}
+
+; Reproducer: `__riscv_vsetvl_e16m4(1024); (void)__riscv_vsetlambda(16);`
+; under a Zvvm extension. The vsetvli is a state writer: it survives unused
+; and stays in front of the lambda write.
+define void @unused_zvvm_vsetvli_write() {
+; CHECK-LABEL: define void @unused_zvvm_vsetvli_write(
+; CHECK-SAME: ) local_unnamed_addr #[[ATTR5]] {
+; CHECK-NEXT:    [[VL:%.*]] = tail call i64 @llvm.riscv.vsetvli.zvvm.i64(i64 1024, i64 1, i64 2)
+; CHECK-NEXT:    [[R:%.*]] = tail call i64 @llvm.riscv.vsetlambda.i64(i64 5)
+; CHECK-NEXT:    ret void
+;
+  %vl = call i64 @llvm.riscv.vsetvli.zvvm.i64(i64 1024, i64 1, i64 2)
+  %r = call i64 @llvm.riscv.vsetlambda.i64(i64 5)
   ret void
 }
 

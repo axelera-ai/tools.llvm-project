@@ -23552,6 +23552,19 @@ void RISCVTargetLowering::AdjustInstrPostInstrSelection(MachineInstr &MI,
     FRMDef->setIsDead(false);
     return;
   }
+  // Under a Zvvm family extension an explicit vsetvli sets the SEW that a
+  // following vsetlambda request is canonicalized against. ISel flags its VL /
+  // VTYPE defs dead like every implicit physreg def, and with an unused result
+  // that leaves nothing to keep MachineCSE, LICM or sinking from merging or
+  // moving it before RISCVInsertVSETVLI marks those defs live, so mark them
+  // live here.
+  if (RISCVInstrInfo::isVectorConfigInstr(MI) &&
+      (Subtarget.hasStdExtZvvmm() || Subtarget.hasStdExtZvvfmm() ||
+       Subtarget.hasStdExtZvvmtls() || Subtarget.hasStdExtZvvmttls())) {
+    MI.findRegisterDefOperand(RISCV::VL, /*TRI=*/nullptr)->setIsDead(false);
+    MI.findRegisterDefOperand(RISCV::VTYPE, /*TRI=*/nullptr)->setIsDead(false);
+    return;
+  }
   // Add FRM dependency to any instructions with dynamic rounding mode.
   int Idx = RISCV::getNamedOperandIdx(MI.getOpcode(), RISCV::OpName::frm);
   if (Idx < 0) {

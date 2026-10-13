@@ -302,6 +302,16 @@ emitRVVVsetvliBuiltin(CodeGenFunction *CGF, const CallExpr *E,
                       int PolicyAttrs, bool IsMasked, unsigned SegInstSEW) {
   auto &Builder = CGF->Builder;
   auto &CGM = CGF->CGM;
+  // Under a Zvvm family extension the vsetvli is a write of the matrix vtype
+  // state: it sets the SEW a following __riscv_vsetlambda is canonicalized
+  // against, so it must survive with its result unused and keep its place.
+  const TargetInfo &TI = CGF->getTarget();
+  if (TI.hasFeature("experimental-zvvmm") ||
+      TI.hasFeature("experimental-zvvfmm") ||
+      TI.hasFeature("experimental-zvvmtls") ||
+      TI.hasFeature("experimental-zvvmttls"))
+    ID = ID == Intrinsic::riscv_vsetvli ? Intrinsic::riscv_vsetvli_zvvm
+                                        : Intrinsic::riscv_vsetvlimax_zvvm;
   llvm::Function *F = CGM.getIntrinsic(ID, {ResultType});
   return Builder.CreateCall(F, Ops, "");
 }

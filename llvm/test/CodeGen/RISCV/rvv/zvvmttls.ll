@@ -7,7 +7,7 @@
 
 ; Zvvmttls transposing tile load/store intrinsics.
 ;
-; See zvvmtls.ll for limitations.
+; See zvvmtls.ll for the vtype contract.
 
 declare <vscale x 2 x i32> @llvm.riscv.vmttl.nxv2i32.p0.iXLen(
   <vscale x 2 x i32>, ptr, iXLen, iXLen)

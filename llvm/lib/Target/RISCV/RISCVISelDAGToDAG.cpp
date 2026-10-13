@@ -464,19 +464,27 @@ void RISCVDAGToDAGISel::selectVSETVLI(SDNode *Node) {
   if (!Subtarget->hasVInstructions())
     return;
 
-  assert(Node->getOpcode() == ISD::INTRINSIC_WO_CHAIN && "Unexpected opcode");
+  // The Zvvm variants write the matrix vtype state (inaccessible memory), so
+  // they arrive chained and the pseudo keeps the chain, which orders them
+  // against the lambda writes and the matrix readers.
+  bool Chained = Node->getOpcode() == ISD::INTRINSIC_W_CHAIN;
+  assert((Chained || Node->getOpcode() == ISD::INTRINSIC_WO_CHAIN) &&
+         "Unexpected opcode");
 
   SDLoc DL(Node);
   MVT XLenVT = Subtarget->getXLenVT();
 
-  unsigned IntNo = Node->getConstantOperandVal(0);
+  unsigned IntNo = Node->getConstantOperandVal(Chained);
 
   assert((IntNo == Intrinsic::riscv_vsetvli ||
-          IntNo == Intrinsic::riscv_vsetvlimax) &&
+          IntNo == Intrinsic::riscv_vsetvlimax ||
+          IntNo == Intrinsic::riscv_vsetvli_zvvm ||
+          IntNo == Intrinsic::riscv_vsetvlimax_zvvm) &&
          "Unexpected vsetvli intrinsic");
 
-  bool VLMax = IntNo == Intrinsic::riscv_vsetvlimax;
-  unsigned Offset = (VLMax ? 1 : 2);
+  bool VLMax = IntNo == Intrinsic::riscv_vsetvlimax ||
+               IntNo == Intrinsic::riscv_vsetvlimax_zvvm;
+  unsigned Offset = (VLMax ? 1 : 2) + Chained;
 
   assert(Node->getNumOperands() == Offset + 2 &&
          "Unexpected number of operands");
@@ -490,32 +498,40 @@ void RISCVDAGToDAGISel::selectVSETVLI(SDNode *Node) {
                                             /*MaskAgnostic*/ true);
   SDValue VTypeIOp = CurDAG->getTargetConstant(VTypeI, DL, XLenVT);
 
-  SDValue VLOperand;
+  SmallVector<SDValue, 3> Ops;
+  auto Replace = [&](unsigned Opcode, SDValue AVL) {
+    Ops = {AVL, VTypeIOp};
+    if (!Chained) {
+      ReplaceNode(Node, CurDAG->getMachineNode(Opcode, DL, XLenVT, Ops));
+      return;
+    }
+    Ops.push_back(Node->getOperand(0));
+    ReplaceNode(Node,
+                CurDAG->getMachineNode(Opcode, DL, XLenVT, MVT::Other, Ops));
+  };
+
+  SDValue AVLOperand = Node->getOperand(1 + Chained);
   unsigned Opcode = RISCV::PseudoVSETVLI;
-  if (auto *C = dyn_cast<ConstantSDNode>(Node->getOperand(1))) {
+  if (auto *C = dyn_cast<ConstantSDNode>(AVLOperand)) {
     if (auto VLEN = Subtarget->getRealVLen())
       if (*VLEN / RISCVVType::getSEWLMULRatio(SEW, VLMul) == C->getZExtValue())
         VLMax = true;
   }
-  if (VLMax || isAllOnesConstant(Node->getOperand(1))) {
-    VLOperand = CurDAG->getRegister(RISCV::X0, XLenVT);
-    Opcode = RISCV::PseudoVSETVLIX0;
-  } else {
-    VLOperand = Node->getOperand(1);
+  if (VLMax || isAllOnesConstant(AVLOperand)) {
+    Replace(RISCV::PseudoVSETVLIX0, CurDAG->getRegister(RISCV::X0, XLenVT));
+    return;
+  }
 
-    if (auto *C = dyn_cast<ConstantSDNode>(VLOperand)) {
-      uint64_t AVL = C->getZExtValue();
-      if (isUInt<5>(AVL)) {
-        SDValue VLImm = CurDAG->getTargetConstant(AVL, DL, XLenVT);
-        ReplaceNode(Node, CurDAG->getMachineNode(RISCV::PseudoVSETIVLI, DL,
-                                                 XLenVT, VLImm, VTypeIOp));
-        return;
-      }
+  if (auto *C = dyn_cast<ConstantSDNode>(AVLOperand)) {
+    uint64_t AVL = C->getZExtValue();
+    if (isUInt<5>(AVL)) {
+      Replace(RISCV::PseudoVSETIVLI,
+              CurDAG->getTargetConstant(AVL, DL, XLenVT));
+      return;
     }
   }
 
-  ReplaceNode(Node,
-              CurDAG->getMachineNode(Opcode, DL, XLenVT, VLOperand, VTypeIOp));
+  Replace(Opcode, AVLOperand);
 }
 
 // Lower llvm.riscv.vsetvl.matrix to a register-form `vsetvl` instruction.
@@ -2274,6 +2290,9 @@ void RISCVDAGToDAGISel::Select(SDNode *Node) {
       break;
     // Zvvm matrix vtype-state intrinsics (inaccessible-memory effects, hence
     // chained).
+    case Intrinsic::riscv_vsetvli_zvvm:
+    case Intrinsic::riscv_vsetvlimax_zvvm:
+      return selectVSETVLI(Node);
     case Intrinsic::riscv_vsetvl_matrix:
       return selectVSETVLMatrix(Node);
     case Intrinsic::riscv_vsetlambda:

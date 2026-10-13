@@ -1217,13 +1217,14 @@ static MCOperand lowerVectorReg(const MachineOperand &MO,
 // MC operand maps:
 //   MAC                : pseudo (vd_wb, vd, vs1, vs2, vl)
 //                       → real (vd_wb, vd, vs1, vs2)
-//   TileLoad           : pseudo (vd, passthru, rs1, rs2, lambda, vl)
+//   TileLoad           : pseudo (vd, passthru, rs1, rs2, lambda, vl, sew)
 //                       → real (vd, rs1, rs2, lambda, NoReg)
-//   TileLoadMask       : pseudo (vd, passthru, rs1, rs2, lambda, V0, vl, policy)
+//   TileLoadMask       : pseudo (vd, passthru, rs1, rs2, lambda, V0, vl, sew,
+//                               policy)
 //                       → real (vd, rs1, rs2, lambda, V0)
-//   TileStore          : pseudo (vs3, rs1, rs2, lambda, vl)
+//   TileStore          : pseudo (vs3, rs1, rs2, lambda, vl, sew)
 //                       → real (vs3, rs1, rs2, lambda, NoReg)
-//   TileStoreMask      : pseudo (vs3, rs1, rs2, lambda, V0, vl)
+//   TileStoreMask      : pseudo (vs3, rs1, rs2, lambda, V0, vl, sew)
 //                       → real (vs3, rs1, rs2, lambda, V0)
 static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
                                    const RISCVSubtarget *STI) {
@@ -1255,7 +1256,8 @@ static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
     return true;
   }
   case TileLoad: {
-    // Pseudo operand layout: vd (def), passthru (tied use), rs1, rs2, lambda, vl.
+    // Pseudo operand layout: vd (def), passthru (tied use), rs1, rs2, lambda,
+    // vl, sew.
     OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vd
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs1
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(3).getReg())); // rs2
@@ -1264,7 +1266,7 @@ static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
     return true;
   }
   case TileLoadMask: {
-    // Pseudo: vd, passthru, rs1, rs2, lambda, mask(V0), vl, policy.
+    // Pseudo: vd, passthru, rs1, rs2, lambda, mask(V0), vl, sew, policy.
     OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vd
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs1
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(3).getReg())); // rs2
@@ -1273,7 +1275,7 @@ static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
     return true;
   }
   case TileStore: {
-    // Pseudo: vs3, rs1, rs2, lambda, vl.
+    // Pseudo: vs3, rs1, rs2, lambda, vl, sew.
     OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vs3
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(1).getReg())); // rs1
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs2
@@ -1282,7 +1284,7 @@ static bool lowerRISCVMatrixPseudo(const MachineInstr *MI, MCInst &OutMI,
     return true;
   }
   case TileStoreMask: {
-    // Pseudo: vs3, rs1, rs2, lambda, mask(V0), vl.
+    // Pseudo: vs3, rs1, rs2, lambda, mask(V0), vl, sew.
     OutMI.addOperand(lowerVectorReg(MI->getOperand(0), TRI));   // vs3
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(1).getReg())); // rs1
     OutMI.addOperand(MCOperand::createReg(MI->getOperand(2).getReg())); // rs2

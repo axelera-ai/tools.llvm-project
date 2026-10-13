@@ -549,26 +549,56 @@ bool isZvvmAltFmtMAC(const MachineInstr &MI) {
                   Info->Kind == RISCVMatrixPseudosTable::MACScaled);
 }
 
-VSETVLIInfo
-RISCVVSETVLIInfoAnalysis::computeInfoForZvvmMAC(const MachineInstr &MI) const {
-  assert(isZvvmAltFmtMAC(MI) && "Expected a Zvvm FP matrix MAC");
+bool isZvvmTileLoadStore(const MachineInstr &MI) {
+  const auto *Info =
+      RISCVMatrixPseudosTable::getMatrixPseudoInfo(MI.getOpcode());
+  return Info && (Info->Kind == RISCVMatrixPseudosTable::TileLoad ||
+                  Info->Kind == RISCVMatrixPseudosTable::TileLoadMask ||
+                  Info->Kind == RISCVMatrixPseudosTable::TileStore ||
+                  Info->Kind == RISCVMatrixPseudosTable::TileStoreMask);
+}
+
+bool isZvvmVTypePseudo(const MachineInstr &MI) {
+  return isZvvmAltFmtMAC(MI) || isZvvmTileLoadStore(MI);
+}
+
+VSETVLIInfo RISCVVSETVLIInfoAnalysis::computeInfoForZvvmPseudo(
+    const MachineInstr &MI) const {
+  assert(isZvvmVTypePseudo(MI) && "Expected a Zvvm FP MAC or tile load/store");
   const uint64_t TSFlags = MI.getDesc().TSFlags;
-  // Operand layout: ..., $vl, $sew (the last two explicit operands).
+  const auto *Info =
+      RISCVMatrixPseudosTable::getMatrixPseudoInfo(MI.getOpcode());
+  // Operand layout: ..., $vl, $sew; the masked tile load appends $policy.
+  bool HasPolicy = Info->Kind == RISCVMatrixPseudosTable::TileLoadMask;
   unsigned NumOps = MI.getNumExplicitOperands();
-  const MachineOperand &VLOp = MI.getOperand(NumOps - 2);
-  unsigned Log2SEW = MI.getOperand(NumOps - 1).getImm();
+  unsigned SEWOpIdx = NumOps - 1 - HasPolicy;
+  const MachineOperand &VLOp = MI.getOperand(SEWOpIdx - 1);
+  unsigned Log2SEW = MI.getOperand(SEWOpIdx).getImm();
   unsigned SEW = 1 << Log2SEW;
   assert(RISCVVType::isValidSEW(SEW) && "Unexpected SEW");
+
+  // Tail-undisturbed is a valid implementation of whatever tail policy the
+  // caller programmed, so it is the safe choice when the incoming vtype is
+  // unknown. The MACs are never masked, so (as for any RVV pseudo without a
+  // mask policy) mask-agnostic is used. A tile load with a live passthru
+  // needs undisturbed tail and mask elements unless its policy says
+  // otherwise.
+  bool TailAgnostic = false;
+  bool MaskAgnostic = true;
+  if (isZvvmTileLoadStore(MI)) {
+    TailAgnostic = hasUndefinedPassthru(MI);
+    if (!TailAgnostic && HasPolicy) {
+      uint64_t Policy = MI.getOperand(NumOps - 1).getImm();
+      TailAgnostic = Policy & RISCVVType::TAIL_AGNOSTIC;
+      MaskAgnostic = Policy & RISCVVType::MASK_AGNOSTIC;
+    }
+  }
 
   VSETVLIInfo InstrInfo;
   Register AVLReg = VLOp.getReg();
   InstrInfo.setAVLRegDef(getVNInfoFromReg(AVLReg, MI, LIS), AVLReg);
-  // Tail-undisturbed is a valid implementation of whatever tail policy the
-  // caller programmed, so it is the safe choice when the incoming vtype is
-  // unknown. The MACs are never masked, so (as for any RVV pseudo without a
-  // mask policy) mask-agnostic is used.
-  InstrInfo.setVTYPE(RISCVII::getLMul(TSFlags), SEW, /*TA=*/false,
-                     /*MA=*/true,
+  InstrInfo.setVTYPE(RISCVII::getLMul(TSFlags), SEW, TailAgnostic,
+                     MaskAgnostic,
                      RISCVII::getAltFmtType(TSFlags) ==
                          RISCVII::AltFmtType::AltFmt,
                      /*TWiden=*/0);

@@ -698,6 +698,16 @@ inline raw_ostream &operator<<(raw_ostream &OS, const VSETVLIInfo &V) {
 /// VL it is interpreted against.
 bool isZvvmAltFmtMAC(const MachineInstr &MI);
 
+/// Return true if \p MI is a Zvvm tile load or store pseudo. Its IR vector
+/// type fixes SEW and LMUL, which the pseudo carries as $sew and VLMul, so
+/// RISCVInsertVSETVLI establishes SEW / LMUL / VL for it while keeping the
+/// caller's matrix fields.
+bool isZvvmTileLoadStore(const MachineInstr &MI);
+
+/// Return true if RISCVInsertVSETVLI derives vtype for \p MI through the Zvvm
+/// path: an altfmt-pinning FP MAC or a tile load / store.
+bool isZvvmVTypePseudo(const MachineInstr &MI);
+
 class RISCVVSETVLIInfoAnalysis {
   const RISCVSubtarget *ST;
   // Possibly null!
@@ -710,10 +720,11 @@ public:
 
   VSETVLIInfo getInfoForVSETVLI(const MachineInstr &MI) const;
   VSETVLIInfo computeInfoForInstr(const MachineInstr &MI) const;
-  // Complete vtype for a Zvvm FP matrix MAC (see isZvvmAltFmtMAC): accumulator
-  // SEW from the pseudo's $sew operand, A/B LMUL from TSFlags, AVL from $vl,
-  // altfmt from the pseudo's AltFmtType, tail-undisturbed.
-  VSETVLIInfo computeInfoForZvvmMAC(const MachineInstr &MI) const;
+  // Complete vtype for a Zvvm pseudo (see isZvvmVTypePseudo): SEW from the
+  // pseudo's $sew operand, LMUL from TSFlags, AVL from $vl, altfmt from the
+  // pseudo's AltFmtType. A MAC is tail-undisturbed and mask-agnostic; a tile
+  // load takes its policy from its passthru and $policy like an RVV load.
+  VSETVLIInfo computeInfoForZvvmPseudo(const MachineInstr &MI) const;
 
 private:
   void forwardVSETVLIAVL(VSETVLIInfo &Info) const;

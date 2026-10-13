@@ -399,19 +399,24 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
     return;
   }
 
-  // Zvvm FP matrix MACs. vtype.altfmt selects — together with SEW — the
-  // accumulator format (FP16 vs BF16 at SEW=16, E4M3 vs E5M2 at SEW=8,
-  // reserved at SEW=32/64). It is fixed by the IR accumulator type and cannot
-  // be written by vsetvl_matrix, so the pass must establish it; and because
-  // its meaning depends on SEW, the MAC also demands its SEW (the accumulator
-  // SEW), its LMUL (the A/B LMUL) and its VL — exactly the values a
-  // correctly-programmed caller has already set, so in the common case
-  // (vsetvl_matrix immediately before the MAC) only altfmt can differ. The
-  // remaining fields are caller state and are kept: policy, and the matrix
+  // Zvvm FP matrix MACs and tile loads / stores. For an FP MAC vtype.altfmt
+  // selects — together with SEW — the accumulator format (FP16 vs BF16 at
+  // SEW=16, E4M3 vs E5M2 at SEW=8, reserved at SEW=32/64). It is fixed by the
+  // IR accumulator type and cannot be written by vsetvl_matrix, so the pass
+  // must establish it; and because its meaning depends on SEW, the MAC also
+  // demands its SEW (the accumulator SEW), its LMUL (the A/B LMUL) and its VL
+  // — exactly the values a correctly-programmed caller has already set, so in
+  // the common case (vsetvl_matrix immediately before the MAC) only altfmt
+  // can differ. A tile load / store demands the SEW and LMUL of its IR vector
+  // type and its VL, like an RVV load / store, plus an undisturbed policy
+  // when it has a live passthru; the caller's vsetvl cannot be relied on
+  // because a memory-free vsetvl call with an unused result is dead code.
+  // The remaining fields are caller state and are kept: policy where not
+  // demanded, altfmt for a tile op while SEW is unchanged, and the matrix
   // fields lambda / bs / altfmt_A / altfmt_B (an SEW-changing write is a
   // may-DEF of lambda, modelled as in the generic path below).
-  if (RISCV::isZvvmAltFmtMAC(MI)) {
-    const VSETVLIInfo NewInfo = VIA.computeInfoForZvvmMAC(MI);
+  if (RISCV::isZvvmVTypePseudo(MI)) {
+    const VSETVLIInfo NewInfo = VIA.computeInfoForZvvmPseudo(MI);
     if (!Info.isValid() || Info.isUnknown() || Info.hasSEWLMULRatioOnly() ||
         Info.getTWiden() != 0) {
       Info = NewInfo;
@@ -420,18 +425,30 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
     DemandedFields Demanded;
     Demanded.SEW = DemandedFields::SEWEqual;
     Demanded.LMUL = DemandedFields::LMULEqual;
-    Demanded.AltFmt = true;
     Demanded.VLAny = true;
+    if (RISCV::isZvvmAltFmtMAC(MI)) {
+      Demanded.AltFmt = true;
+    } else {
+      Demanded.TailPolicy = !NewInfo.getTailAgnostic();
+      Demanded.MaskPolicy = !NewInfo.getMaskAgnostic();
+    }
     if (Info.isCompatible(Demanded, NewInfo, LIS))
       return;
     unsigned PrevSEW = Info.getSEW();
     if (!(Info.hasSameAVL(NewInfo) && Info.hasSameVLMAX(NewInfo)))
       Info.setAVL(NewInfo);
-    Info.setVTYPE(NewInfo.getVLMUL(), NewInfo.getSEW(), Info.getTailAgnostic(),
-                  Info.getMaskAgnostic(), NewInfo.getAltFmt(), /*W=*/0);
-    if (Info.getSEW() != PrevSEW)
+    Info.setVTYPE(
+        NewInfo.getVLMUL(), NewInfo.getSEW(),
+        Demanded.TailPolicy ? NewInfo.getTailAgnostic() : Info.getTailAgnostic(),
+        Demanded.MaskPolicy ? NewInfo.getMaskAgnostic() : Info.getMaskAgnostic(),
+        Demanded.AltFmt ? NewInfo.getAltFmt() : Info.getAltFmt(), /*W=*/0);
+    if (Info.getSEW() != PrevSEW) {
       Info.setMatrixFields(/*L=*/0, Info.getBs(), Info.getAltFmtA(),
                            Info.getAltFmtB());
+      // See the generic path below for where altfmt may follow an SEW change.
+      if (!Demanded.AltFmt && Info.getSEW() != 8 && Info.getSEW() != 16)
+        Info.setAltFmt(false);
+    }
     return;
   }
 
@@ -501,9 +518,18 @@ void RISCVInsertVSETVLI::transferBefore(VSETVLIInfo &Info,
     // state is later emitted as a register-form vsetvl, lambda bits of 000
     // request the spec's preserve-or-initialize behavior, which never
     // destroys the hardware's selected lambda.
-    if (Info.getSEW() != PrevSEW)
+    //
+    // vtype.altfmt is legal only at SEW 8 and 16 (Zvfbfa, Zvfofp8min and
+    // Zvvfmm define it there); at SEW 32 and 64 a set altfmt is vill. An
+    // instruction that does not demand altfmt keeps the incoming value, which
+    // was legal, within SEW 8 / 16, and drops it when its config moves SEW
+    // to 32 / 64, where altfmt=0 is the only legal value.
+    if (Info.getSEW() != PrevSEW) {
       Info.setMatrixFields(/*L=*/0, Info.getBs(), Info.getAltFmtA(),
                            Info.getAltFmtB());
+      if (!Demanded.AltFmt && Info.getSEW() != 8 && Info.getSEW() != 16)
+        Info.setAltFmt(false);
+    }
   }
 }
 
@@ -572,7 +598,7 @@ bool RISCVInsertVSETVLI::computeVLVTYPEChanges(const MachineBasicBlock &MBB,
         RISCVII::hasSEWOp(MI.getDesc().TSFlags) ||
         RISCV::isVectorCopy(ST->getRegisterInfo(), MI) ||
         RISCVInstrInfo::isXSfmmVectorConfigInstr(MI) ||
-        RISCV::isZvvmAltFmtMAC(MI))
+        RISCV::isZvvmVTypePseudo(MI))
       HadVectorOp = true;
 
     transferAfter(Info, MI);
@@ -766,10 +792,10 @@ void RISCVInsertVSETVLI::emitVSETVLIs(MachineBasicBlock &MBB) {
                                               /*isImp*/ true));
     }
 
-    // Zvvm FP matrix MAC: transferBefore established the vtype it demands
-    // (see there). The pseudo already carries implicit VL / VTYPE uses and
-    // keeps its $vl operand.
-    if (RISCV::isZvvmAltFmtMAC(MI) &&
+    // Zvvm FP matrix MAC or tile load / store: transferBefore established the
+    // vtype it demands (see there). The pseudo already carries implicit VL /
+    // VTYPE uses and keeps its $vl operand.
+    if (RISCV::isZvvmVTypePseudo(MI) &&
         !PrevInfo.isCompatible(DemandedFields::all(), CurInfo, LIS)) {
       if (!PrefixTransparent || needVSETVLIPHI(CurInfo, MBB))
         insertVSETVLI(MBB, MI, MI.getDebugLoc(), CurInfo, PrevInfo);

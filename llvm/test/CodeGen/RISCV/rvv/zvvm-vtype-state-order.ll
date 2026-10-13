@@ -154,6 +154,7 @@ define void @mac_around_write(<vscale x 2 x i32> %c, <vscale x 2 x i32> %a,
 ; CHECK-NEXT:    srli a4, a4, 60
 ; CHECK-NEXT:    andi a4, a4, 7
 ; CHECK-NEXT:    vmmacc.vv v8, v9, v10
+; CHECK-NEXT:    vsetvli zero, a0, e32, m1, ta, ma
 ; CHECK-NEXT:    vmts.v v11, (a1), a3
 ; CHECK-NEXT:    vmts.v v8, (a2), a3
 ; CHECK-NEXT:    ret
@@ -193,6 +194,7 @@ define void @tile_load_around_write(ptr %src, i64 %ld, i64 %vl, ptr %p0,
 ; CHECK-NEXT:    csrr a5, vtype
 ; CHECK-NEXT:    srli a5, a5, 60
 ; CHECK-NEXT:    andi a5, a5, 7
+; CHECK-NEXT:    vsetvli zero, a2, e32, m1, ta, ma
 ; CHECK-NEXT:    vmtl.v v8, (a0), a1
 ; CHECK-NEXT:    csrr a5, vtype
 ; CHECK-NEXT:    li a6, 7
@@ -207,6 +209,7 @@ define void @tile_load_around_write(ptr %src, i64 %ld, i64 %vl, ptr %p0,
 ; CHECK-NEXT:    csrr a5, vtype
 ; CHECK-NEXT:    srli a5, a5, 60
 ; CHECK-NEXT:    andi a5, a5, 7
+; CHECK-NEXT:    vsetvli zero, a2, e32, m1, ta, ma
 ; CHECK-NEXT:    vmtl.v v9, (a0), a1
 ; CHECK-NEXT:    vmts.v v8, (a3), a1
 ; CHECK-NEXT:    vmts.v v9, (a4), a1
@@ -229,6 +232,7 @@ define void @tile_load_around_write(ptr %src, i64 %ld, i64 %vl, ptr %p0,
 define void @tile_store_around_write(<vscale x 2 x i32> %v, ptr %p, i64 %ld,
 ; CHECK-LABEL: tile_store_around_write:
 ; CHECK:       # %bb.0:
+; CHECK-NEXT:    vsetvli zero, a2, e32, m1, ta, ma
 ; CHECK-NEXT:    vmts.v v8, (a0), a1
 ; CHECK-NEXT:    csrr a3, vtype
 ; CHECK-NEXT:    li a4, 7
@@ -243,6 +247,7 @@ define void @tile_store_around_write(<vscale x 2 x i32> %v, ptr %p, i64 %ld,
 ; CHECK-NEXT:    csrr a3, vtype
 ; CHECK-NEXT:    srli a3, a3, 60
 ; CHECK-NEXT:    andi a3, a3, 7
+; CHECK-NEXT:    vsetvli zero, a2, e32, m1, ta, ma
 ; CHECK-NEXT:    vmts.v v8, (a0), a1
 ; CHECK-NEXT:    ret
                                      i64 %vl) nounwind {

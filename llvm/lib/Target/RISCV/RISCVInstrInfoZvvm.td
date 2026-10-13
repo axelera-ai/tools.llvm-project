@@ -11,13 +11,15 @@
 // matrix multiply-accumulate), Zvvmtls (order-preserving tile load/store),
 // and Zvvmttls (transposing tile load/store).
 //
-// Caller responsibility: vtype must be configured (SEW, LMUL, lambda, bs,
-// altfmt_A/altfmt_B) via vsetvl prior to invoking these instructions.
-// RISCVInsertVSETVLI preserves the matrix fields but does not derive them.
-// For the FP-accumulator MACs it does establish vtype.altfmt (the accumulator
-// format, e.g. FP16 vs BF16 at SEW=16), which the IR accumulator type
-// determines and vsetvl_matrix cannot write, together with the SEW / LMUL /
-// VL that altfmt is interpreted against.
+// Caller responsibility: the matrix vtype fields (lambda, bs,
+// altfmt_A/altfmt_B) must be configured via vsetvl_matrix / vsetlambda prior
+// to invoking these instructions. RISCVInsertVSETVLI preserves those fields
+// but does not derive them. It does establish SEW / LMUL / VL for the tile
+// loads and stores (from the IR vector type, like any RVV load or store) and
+// for the FP-accumulator MACs, where it also sets vtype.altfmt (the
+// accumulator format, e.g. FP16 vs BF16 at SEW=16), which the IR accumulator
+// type determines and vsetvl_matrix cannot write. The integer MACs erase the
+// C-side SEW at the IR level, so their SEW / LMUL / VL stay caller state.
 //
 //===----------------------------------------------------------------------===//
 
@@ -135,13 +137,13 @@ def V8WMMACC_VV : RVInstVMatrixMAC<0b111011, "v8wmmacc.vv">;
 //
 // Kind values:
 //   0 = MAC                  — pseudo (vd_wb, vd, vs1, vs2, vl[, sew]) → real (vd_wb, vd, vs1, vs2)
-//   1 = Tile load (unmasked) — pseudo (vd, passthru, rs1, rs2, lambda, vl)
+//   1 = Tile load (unmasked) — pseudo (vd, passthru, rs1, rs2, lambda, vl, sew)
 //                              → real (vd, rs1, rs2, lambda, zero_reg)
-//   2 = Tile load masked     — pseudo (vd, passthru, rs1, rs2, lambda, V0, vl, policy)
+//   2 = Tile load masked     — pseudo (vd, passthru, rs1, rs2, lambda, V0, vl, sew, policy)
 //                              → real (vd, rs1, rs2, lambda, V0)
-//   3 = Tile store unmasked  — pseudo (vs3, rs1, rs2, lambda, vl)
+//   3 = Tile store unmasked  — pseudo (vs3, rs1, rs2, lambda, vl, sew)
 //                              → real (vs3, rs1, rs2, lambda, zero_reg)
-//   4 = Tile store masked    — pseudo (vs3, rs1, rs2, lambda, V0, vl)
+//   4 = Tile store masked    — pseudo (vs3, rs1, rs2, lambda, V0, vl, sew)
 //                              → real (vs3, rs1, rs2, lambda, V0)
 //   5 = MAC scaled (vm=0)    — pseudo (vd_wb, vd, vs1, vs2, scale, vl, sew)
 //                              → real (vd_wb, vd, vs1, vs2, V0)
@@ -783,7 +785,12 @@ def PseudoVSETVL_MATRIX
 //===----------------------------------------------------------------------===//
 
 // Size: the 13-instruction expansion (both the immediate and register forms).
+// Uses = [VL, VTYPE]: the expansion reads both CSRs, and the read keeps a
+// preceding vsetvli with an unused result in place (its VL / VTYPE defs stay
+// live, so neither dead-MI elimination nor machine LICM may drop or hoist it
+// across the lambda write that is canonicalized against its SEW).
 let hasSideEffects = 1, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE],
+    Uses = [VL, VTYPE],
     Constraints = "@earlyclobber $rd,@earlyclobber $scratch", Size = 52 in {
 def PseudoVSETLAMBDA
     : Pseudo<(outs GPR:$rd, GPR:$scratch), (ins ixlenimm_li:$encoding), []>,
@@ -958,28 +965,35 @@ let Predicates = [HasStdExtZvvmttls] in {
 // Each pseudo is generated per (mnemonic, LMUL ∈ {1,2,4,8}) so its register
 // operand uses the LMUL-appropriate VR / VRM2 / VRM4 / VRM8 class. The single
 // underlying real instruction (VMTL_V / VMTS_V / VMTTL_V / VMTTS_V) always
-// encodes via the base VR register number; the LMUL grouping is established
-// in vtype by a prior vsetvl_matrix. MC lowering (RISCVMatrixPseudo path)
-// drops $passthru / $vl / $policy and adds zero_reg or V0 for $vm depending
-// on masked-ness, and converts VRM{2,4,8} → VR via sub_vrm1_0.
+// encodes via the base VR register number. The IR vector type fixes the SEW
+// and LMUL the tile is laid out with, so the pseudo carries them for
+// RISCVInsertVSETVLI the way the FP MACs do: VLMul in TSFlags and $sew (log2
+// of the element width, supplied by the pattern), together with $vl. The
+// caller cannot be relied on for them, because the plain vsetvl intrinsic is
+// memory-free and a call whose result is unused is dead code. The pass
+// establishes SEW / LMUL / VL and keeps the caller's matrix fields (see
+// RISCVInsertVSETVLI::transferBefore). MC lowering (RISCVMatrixPseudo path)
+// drops $passthru / $vl / $sew / $policy and adds zero_reg or V0 for $vm
+// depending on masked-ness, and converts VRM{2,4,8} → VR via sub_vrm1_0.
 //===----------------------------------------------------------------------===//
 
 class PseudoVMatrixTileLoad<Instruction realInst, LMULInfo m>
     : Pseudo<(outs m.vrclass:$vd),
              (ins m.vrclass:$passthru, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                  lambdaarg:$lambda, GPRNoX0:$vl), []>,
+                  lambdaarg:$lambda, GPRNoX0:$vl, sew:$sew), []>,
       RISCVMatrixPseudo<realInst, /*TileLoad=*/1> {
   let mayLoad = 1;
   let mayStore = 0;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE];
   let Constraints = "$vd = $passthru";
+  let VLMul = m.value;
 }
 
 class PseudoVMatrixTileLoadMask<Instruction realInst, LMULInfo m>
     : Pseudo<(outs m.vrclass:$vd),
              (ins m.vrclass:$passthru, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                  lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl,
+                  lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl, sew:$sew,
                   vec_policy:$policy), []>,
       RISCVMatrixPseudo<realInst, /*TileLoadMask=*/2> {
   let mayLoad = 1;
@@ -987,12 +1001,13 @@ class PseudoVMatrixTileLoadMask<Instruction realInst, LMULInfo m>
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE, V0];
   let Constraints = "$vd = $passthru";
+  let VLMul = m.value;
 }
 
 class PseudoVMatrixTileStore<Instruction realInst, LMULInfo m>
     : Pseudo<(outs),
              (ins m.vrclass:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                  lambdaarg:$lambda, GPRNoX0:$vl), []>,
+                  lambdaarg:$lambda, GPRNoX0:$vl, sew:$sew), []>,
       RISCVMatrixPseudo<realInst, /*TileStore=*/3> {
   // mayLoad = 1: the tile-store intrinsics read the matrix vtype state
   // (inaccessible memory), which tablegen maps to mayLoad; see
@@ -1001,12 +1016,13 @@ class PseudoVMatrixTileStore<Instruction realInst, LMULInfo m>
   let mayStore = 1;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE];
+  let VLMul = m.value;
 }
 
 class PseudoVMatrixTileStoreMask<Instruction realInst, LMULInfo m>
     : Pseudo<(outs),
              (ins m.vrclass:$vs3, GPRMemZeroOffset:$rs1, GPR:$rs2,
-                  lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl), []>,
+                  lambdaarg:$lambda, VMV0:$mask, GPRNoX0:$vl, sew:$sew), []>,
       RISCVMatrixPseudo<realInst, /*TileStoreMask=*/4> {
   // mayLoad = 1: the tile-store intrinsics read the matrix vtype state
   // (inaccessible memory), which tablegen maps to mayLoad; see
@@ -1015,6 +1031,7 @@ class PseudoVMatrixTileStoreMask<Instruction realInst, LMULInfo m>
   let mayStore = 1;
   let hasSideEffects = 0;
   let Uses = [VL, VTYPE, V0];
+  let VLMul = m.value;
 }
 
 defvar AllZvvmTileLSLMULs = [V_M1, V_M2, V_M4, V_M8];
@@ -1038,11 +1055,11 @@ foreach m = AllZvvmTileLSLMULs in {
 // ISel patterns: intrinsic -> pseudo.
 //
 // The tile load/store instructions are element-type-agnostic at the encoding
-// layer — SEW comes from vtype.vsew and the only thing the IR vector type
-// affects in the backend is register-class selection. We emit one pattern per
-// (intrinsic, lambda, element-type, LMUL) and dispatch to the matching
-// per-LMUL pseudo (PseudoVMTL_V_M{1,2,4,8}, etc.) so VR / VRM2 / VRM4 / VRM8
-// is picked up correctly via vti.RegClass.
+// layer — SEW comes from vtype.vsew. The IR vector type selects the register
+// class and supplies the $sew operand that RISCVInsertVSETVLI programs vtype
+// from. We emit one pattern per (intrinsic, lambda, element-type, LMUL) and
+// dispatch to the matching per-LMUL pseudo (PseudoVMTL_V_M{1,2,4,8}, etc.) so
+// VR / VRM2 / VRM4 / VRM8 is picked up correctly via vti.RegClass.
 //===----------------------------------------------------------------------===//
 
 // Vector types the tile load/store builtins are ISel-pattern-matched over:
@@ -1065,7 +1082,7 @@ class TileLoadPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                             (XLenVT GPR:$rs2),
                             (XLenVT GPRNoX0:$vl))),
           (pseudo vti.RegClass:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal,
-                  GPRNoX0:$vl)>;
+                  GPRNoX0:$vl, vti.Log2SEW)>;
 
 class TileLoadMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                       VTypeInfo vti>
@@ -1076,7 +1093,8 @@ class TileLoadMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                             (XLenVT GPRNoX0:$vl),
                             (XLenVT timm:$policy))),
           (pseudo vti.RegClass:$passthru, GPR:$rs1, GPR:$rs2, lambdaVal,
-                  VMV0:$mask, GPRNoX0:$vl, (XLenVT timm:$policy))>;
+                  VMV0:$mask, GPRNoX0:$vl, vti.Log2SEW,
+                  (XLenVT timm:$policy))>;
 
 class TileStorePat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                    VTypeInfo vti>
@@ -1085,7 +1103,7 @@ class TileStorePat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                 (XLenVT GPR:$rs2),
                 (XLenVT GPRNoX0:$vl)),
           (pseudo vti.RegClass:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal,
-                  GPRNoX0:$vl)>;
+                  GPRNoX0:$vl, vti.Log2SEW)>;
 
 class TileStoreMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                        VTypeInfo vti>
@@ -1095,7 +1113,7 @@ class TileStoreMaskPat<Intrinsic intr, Instruction pseudo, int lambdaVal,
                 (vti.Mask VMV0:$mask),
                 (XLenVT GPRNoX0:$vl)),
           (pseudo vti.RegClass:$vs3, GPR:$rs1, GPR:$rs2, lambdaVal,
-                  VMV0:$mask, GPRNoX0:$vl)>;
+                  VMV0:$mask, GPRNoX0:$vl, vti.Log2SEW)>;
 
 // Each per-lambda intrinsic lowers to the same pseudo (for its (mnemonic,
 // LMUL)) with a different literal lambda value in the operand slot. Lambda

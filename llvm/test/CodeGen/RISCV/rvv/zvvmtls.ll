@@ -7,10 +7,10 @@
 
 ; Zvvmtls order-preserving tile load/store intrinsics.
 ;
-; Phase 2 does not integrate with RISCVInsertVSETVLI for the new vtype fields
-; (lambda, altfmt_A, altfmt_B). Callers must program vtype via vsetvl before
-; invoking these intrinsics. Tests verify the mnemonic and operand routing
-; only.
+; RISCVInsertVSETVLI programs SEW / LMUL / VL from the IR vector type (see
+; zvvm-tile-vsetvl-insert.ll). The matrix vtype fields (lambda, altfmt_A,
+; altfmt_B) stay caller state, programmed via vsetvl_matrix / vsetlambda.
+; Tests verify the mnemonic and operand routing only.
 
 declare <vscale x 2 x i32> @llvm.riscv.vmtl.nxv2i32.p0.iXLen(
   <vscale x 2 x i32>, ptr, iXLen, iXLen)

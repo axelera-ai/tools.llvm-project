@@ -6040,8 +6040,10 @@ def PseudoVRELOAD2_M8 : Pseudo<(outs VRN2M8:$rs1), (ins GPR:$rs2), []>;
 // 6. Configuration-Setting Instructions
 //===----------------------------------------------------------------------===//
 
-// Pseudos.
-let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE] in {
+// Pseudos. hasPostISelHook: see RISCVTargetLowering::AdjustInstrPostInstrSelection
+// for the VL / VTYPE liveness a Zvvm target needs on an explicit config.
+let hasSideEffects = 0, mayLoad = 0, mayStore = 0, Defs = [VL, VTYPE],
+    hasPostISelHook = 1 in {
 // Due to rs1=X0 having special meaning, we need a GPRNoX0 register class for
 // the when we aren't using one of the special X0 encodings. Otherwise it could
 // be accidentally be made X0 by MachineIR optimizations. To satisfy the
