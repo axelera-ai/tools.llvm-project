@@ -55,6 +55,8 @@ class RISCVReg128<RISCVReg64 subreg>
 let FallbackRegAltNameIndex = NoRegAltName in
 def ABIRegAltName : RegAltNameIndex;
 
+def sub_vrm8_0 : SubRegIndex<512>;
+def sub_vrm8_1 : SubRegIndex<512, 512>;
 def sub_vrm4_0 : SubRegIndex<256>;
 def sub_vrm4_1 : SubRegIndex<256, 256>;
 def sub_vrm2_0 : SubRegIndex<128>;
@@ -831,6 +833,13 @@ def ZZZ_VRMF2NoV0 : VReg<VMF2VTs, (add VRNoV0), 1>;
 
 def VMV0 : VReg<VMaskVTs, (add V0), 1>;
 
+// V0 as a data register holding the Zvvm/IME paired E8M0 block scales
+// (16-bit scale pairs, one full register: vuint16m1_t). The microscaled
+// (vm=0) matrix multiply-accumulate pseudos take their scale operand in this
+// class so register allocation places the value in v0, mirroring how VMV0
+// carries mask operands.
+def VMV0Pair : VReg<[nxv4i16], (add V0), 1>;
+
 // The register class is added for inline assembly for vector mask types.
 // The ZZZ_ prefix is to make sure these are ordered after VR/VRNoV0 in the
 // regclass enum. Tablegen uses the name to break ties. This is important
@@ -876,6 +885,18 @@ foreach m = LMULList in {
              m, nf>;
   }
 }
+
+// RISC-V IME (Zvvm) m16 accumulator register groups: pairs of M8 groups.
+// Unlike the Zvlsseg segment tuples above (NF x LMUL <= 8), the IME
+// EMUL_C = 16 accumulator tile is architecturally required to be
+// 16-register aligned, so the class contains exactly the two aligned
+// pairs (v16-v31 first in allocation order to keep v0-v15, which contains
+// the mask register v0, free for as long as possible).
+def VN2M8 : RegisterTuples<[sub_vrm8_0, sub_vrm8_1],
+                           [(add V16M8, V0M8), (add V24M8, V8M8)],
+                           ["v16", "v0"]>;
+defvar VTupM8N2VTs = [riscv_nxv64i8x2];
+def VRN2M8 : VReg<VTupM8N2VTs, (add VN2M8), 8, 2>;
 
 //===----------------------------------------------------------------------===//
 // Special registers

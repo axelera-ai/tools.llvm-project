@@ -185,7 +185,7 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
       MVT::riscv_nxv8i8x2,  MVT::riscv_nxv8i8x3,  MVT::riscv_nxv8i8x4,
       MVT::riscv_nxv8i8x5,  MVT::riscv_nxv8i8x6,  MVT::riscv_nxv8i8x7,
       MVT::riscv_nxv8i8x8,  MVT::riscv_nxv16i8x2, MVT::riscv_nxv16i8x3,
-      MVT::riscv_nxv16i8x4, MVT::riscv_nxv32i8x2};
+      MVT::riscv_nxv16i8x4, MVT::riscv_nxv32i8x2, MVT::riscv_nxv64i8x2};
 
   if (Subtarget.hasVInstructions()) {
     auto addRegClassForRVV = [this](MVT VT) {
@@ -286,6 +286,8 @@ RISCVTargetLowering::RISCVTargetLowering(const TargetMachine &TM,
     addRegisterClass(MVT::riscv_nxv16i8x3, &RISCV::VRN3M2RegClass);
     addRegisterClass(MVT::riscv_nxv16i8x4, &RISCV::VRN4M2RegClass);
     addRegisterClass(MVT::riscv_nxv32i8x2, &RISCV::VRN2M4RegClass);
+    // IME (Zvvm) m16 accumulator: a 16-register-aligned pair of M8 groups.
+    addRegisterClass(MVT::riscv_nxv64i8x2, &RISCV::VRN2M8RegClass);
   }
 
   // fixed vector is stored in GPRs for P extension packed operations
@@ -2821,6 +2823,8 @@ RISCVVType::VLMUL RISCVTargetLowering::getLMUL(MVT VT) {
       return RISCVVType::LMUL_2;
     if (VT.SimpleTy == MVT::riscv_nxv32i8x2)
       return RISCVVType::LMUL_4;
+    if (VT.SimpleTy == MVT::riscv_nxv64i8x2)
+      return RISCVVType::LMUL_8;
     llvm_unreachable("Invalid vector tuple type LMUL.");
   }
 
@@ -2885,6 +2889,11 @@ unsigned RISCVTargetLowering::getSubregIndexByMVT(MVT VT, unsigned Index) {
                   "Unexpected subreg numbering");
     return RISCV::sub_vrm4_0 + Index;
   }
+  if (LMUL == RISCVVType::LMUL_8) {
+    static_assert(RISCV::sub_vrm8_1 == RISCV::sub_vrm8_0 + 1,
+                  "Unexpected subreg numbering");
+    return RISCV::sub_vrm8_0 + Index;
+  }
   llvm_unreachable("Invalid vector type.");
 }
 
@@ -2922,6 +2931,9 @@ unsigned RISCVTargetLowering::getRegClassIDForVecVT(MVT VT) {
     case 4:
       assert(NF == 2);
       return RISCV::VRN2M4RegClassID;
+    case 8:
+      assert(NF == 2);
+      return RISCV::VRN2M8RegClassID;
     default:
       break;
     }
@@ -23538,6 +23550,19 @@ void RISCVTargetLowering::AdjustInstrPostInstrSelection(MachineInstr &MI,
   // reordering.
   if (auto *FRMDef = MI.findRegisterDefOperand(RISCV::FRM, /*TRI=*/nullptr)) {
     FRMDef->setIsDead(false);
+    return;
+  }
+  // Under a Zvvm family extension an explicit vsetvli sets the SEW that a
+  // following vsetlambda request is canonicalized against. ISel flags its VL /
+  // VTYPE defs dead like every implicit physreg def, and with an unused result
+  // that leaves nothing to keep MachineCSE, LICM or sinking from merging or
+  // moving it before RISCVInsertVSETVLI marks those defs live, so mark them
+  // live here.
+  if (RISCVInstrInfo::isVectorConfigInstr(MI) &&
+      (Subtarget.hasStdExtZvvmm() || Subtarget.hasStdExtZvvfmm() ||
+       Subtarget.hasStdExtZvvmtls() || Subtarget.hasStdExtZvvmttls())) {
+    MI.findRegisterDefOperand(RISCV::VL, /*TRI=*/nullptr)->setIsDead(false);
+    MI.findRegisterDefOperand(RISCV::VTYPE, /*TRI=*/nullptr)->setIsDead(false);
     return;
   }
   // Add FRM dependency to any instructions with dynamic rounding mode.

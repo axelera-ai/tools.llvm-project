@@ -54,6 +54,9 @@ public:
   /// Indicate RISC-V Andes vector builtin functions enabled or not.
   bool DeclareAndesVectorBuiltins = false;
 
+  /// Indicate RISC-V Zvvm matrix vector builtin functions enabled or not.
+  bool DeclareZvvmVectorBuiltins = false;
+
   std::unique_ptr<sema::RISCVIntrinsicManager> IntrinsicManager;
 
   bool checkTargetVersionAttr(const StringRef Param, const SourceLocation Loc,

@@ -298,7 +298,7 @@ multiclass RVVNonTupleVCreateBuiltin<int dst_lmul, list<int> src_lmul_list> {
     defvar src_s = FixedVString<src_lmul, num, "v">.S;
     def vcreate # src_v # dst_v : RVVBuiltin<src_v # dst_v,
                                              dst_v # src_s,
-                                             "csilxfdy">;
+                                             "csilxfdygh">;
 
     defvar src_uv = FixedVString<src_lmul, num, "Uv">.V;
     defvar src_us = FixedVString<src_lmul, num, "Uv">.S;
@@ -1805,6 +1805,17 @@ let HasMasked = false, HasVL = false, IRName = "" in {
     def vreinterpret_u_bf16 : RVVBuiltin<"vUv", "Uvv", "y", "Uv">;
     def vreinterpret_bf16_i : RVVBuiltin<"Ivv", "vIv", "y", "v">;
     def vreinterpret_bf16_u : RVVBuiltin<"Uvv", "vUv", "y", "v">;
+    // Zvvm/IME OFP8 <-> 8-bit integer, and E4M3 <-> E5M2, at the same LMUL.
+    // Bit-preserving: the OFP8 types use an i8 container, so no IR is
+    // emitted.
+    def vreinterpret_i_ofp8 : RVVBuiltin<"vIv", "Ivv", "gh", "Iv">;
+    def vreinterpret_u_ofp8 : RVVBuiltin<"vUv", "Uvv", "gh", "Uv">;
+    def vreinterpret_ofp8_i : RVVBuiltin<"Ivv", "vIv", "gh", "v">;
+    def vreinterpret_ofp8_u : RVVBuiltin<"Uvv", "vUv", "gh", "v">;
+    def vreinterpret_e5m2_e4m3 : RVVBuiltin<"v(OFP8:E5M2)v", "(OFP8:E5M2)vv",
+                                            "g", "(OFP8:E5M2)v">;
+    def vreinterpret_e4m3_e5m2 : RVVBuiltin<"v(OFP8:E4M3)v", "(OFP8:E4M3)vv",
+                                            "h", "(OFP8:E4M3)v">;
 
     // Reinterpret between different SEW under the same LMUL
     foreach dst_sew = ["(FixedSEW:8)", "(FixedSEW:16)", "(FixedSEW:32)",
@@ -1868,7 +1879,7 @@ let HasMasked = false, HasVL = false, IRName = "" in {
       ManualCodegen = [{
         return llvm::PoisonValue::get(ResultType);
       }] in {
-    def vundefined : RVVBuiltin<"v", "v", "csilxfdy">;
+    def vundefined : RVVBuiltin<"v", "v", "csilxfdygh">;
     def vundefined_u : RVVBuiltin<"Uv", "Uv", "csil">;
 
     foreach nf = NFList in {
@@ -1892,7 +1903,7 @@ let HasMasked = false, HasVL = false, IRName = "" in {
     foreach dst_lmul = ["(SFixedLog2LMUL:-3)", "(SFixedLog2LMUL:-2)", "(SFixedLog2LMUL:-1)",
                         "(SFixedLog2LMUL:0)", "(SFixedLog2LMUL:1)", "(SFixedLog2LMUL:2)"] in {
       def vlmul_trunc # dst_lmul : RVVBuiltin<"v" # dst_lmul # "v",
-                                              dst_lmul # "vv", "csilxfdy", dst_lmul # "v">;
+                                              dst_lmul # "vv", "csilxfdygh", dst_lmul # "v">;
       def vlmul_trunc_u # dst_lmul : RVVBuiltin<"Uv" # dst_lmul # "Uv",
                                                 dst_lmul # "UvUv", "csil", dst_lmul # "Uv">;
     }
@@ -1910,7 +1921,7 @@ let HasMasked = false, HasVL = false, IRName = "" in {
     foreach dst_lmul = ["(LFixedLog2LMUL:-2)", "(LFixedLog2LMUL:-1)", "(LFixedLog2LMUL:-0)",
                         "(LFixedLog2LMUL:1)", "(LFixedLog2LMUL:2)", "(LFixedLog2LMUL:3)"] in {
       def vlmul_ext # dst_lmul : RVVBuiltin<"v" # dst_lmul # "v",
-                                            dst_lmul # "vv", "csilxfdy", dst_lmul # "v">;
+                                            dst_lmul # "vv", "csilxfdygh", dst_lmul # "v">;
       def vlmul_ext_u # dst_lmul : RVVBuiltin<"Uv" # dst_lmul # "Uv",
                                               dst_lmul # "UvUv", "csil", dst_lmul # "Uv">;
     }
@@ -1922,7 +1933,7 @@ let HasMasked = false, HasVL = false, IRName = "" in {
                                  PolicyAttrs, IsMasked, SegInstSEW);
       }] in {
     foreach dst_lmul = ["(SFixedLog2LMUL:0)", "(SFixedLog2LMUL:1)", "(SFixedLog2LMUL:2)"] in {
-      def : RVVBuiltin<"v" # dst_lmul # "v", dst_lmul # "vvKz", "csilxfdy", dst_lmul # "v">;
+      def : RVVBuiltin<"v" # dst_lmul # "v", dst_lmul # "vvKz", "csilxfdygh", dst_lmul # "v">;
       def : RVVBuiltin<"Uv" # dst_lmul # "Uv", dst_lmul # "UvUvKz", "csil", dst_lmul # "Uv">;
     }
     foreach nf = NFList in {
@@ -1938,7 +1949,7 @@ let HasMasked = false, HasVL = false, IRName = "" in {
                                  PolicyAttrs, IsMasked, SegInstSEW);
       }] in {
     foreach dst_lmul = ["(LFixedLog2LMUL:1)", "(LFixedLog2LMUL:2)", "(LFixedLog2LMUL:3)"] in {
-      def : RVVBuiltin<"v" # dst_lmul # "v", dst_lmul # "v" # dst_lmul # "vKzv", "csilxfdy">;
+      def : RVVBuiltin<"v" # dst_lmul # "v", dst_lmul # "v" # dst_lmul # "vKzv", "csilxfdygh">;
       def : RVVBuiltin<"Uv" # dst_lmul # "Uv", dst_lmul # "Uv" # dst_lmul #"UvKzUv", "csil">;
     }
     foreach nf = NFList in {

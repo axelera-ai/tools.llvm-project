@@ -78,6 +78,12 @@ static const PrototypeDescriptor RVAndesVectorSignatureTable[] = {
 #undef DECL_SIGNATURE_TABLE
 };
 
+static const PrototypeDescriptor RVZvvmVectorSignatureTable[] = {
+#define DECL_SIGNATURE_TABLE
+#include "clang/Basic/riscv_zvvm_vector_builtin_sema.inc"
+#undef DECL_SIGNATURE_TABLE
+};
+
 static const RVVIntrinsicRecord RVVIntrinsicRecords[] = {
 #define DECL_INTRINSIC_RECORDS
 #include "clang/Basic/riscv_vector_builtin_sema.inc"
@@ -96,6 +102,12 @@ static const RVVIntrinsicRecord RVAndesVectorIntrinsicRecords[] = {
 #undef DECL_INTRINSIC_RECORDS
 };
 
+static const RVVIntrinsicRecord RVZvvmVectorIntrinsicRecords[] = {
+#define DECL_INTRINSIC_RECORDS
+#include "clang/Basic/riscv_zvvm_vector_builtin_sema.inc"
+#undef DECL_INTRINSIC_RECORDS
+};
+
 // Get subsequence of signature table.
 static ArrayRef<PrototypeDescriptor>
 ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
@@ -106,8 +118,23 @@ ProtoSeq2ArrayRef(IntrinsicKind K, uint16_t Index, uint8_t Length) {
     return ArrayRef(&RVSiFiveVectorSignatureTable[Index], Length);
   case IntrinsicKind::ANDES_VECTOR:
     return ArrayRef(&RVAndesVectorSignatureTable[Index], Length);
+  case IntrinsicKind::ZVVM_VECTOR:
+    return ArrayRef(&RVZvvmVectorSignatureTable[Index], Length);
   }
   llvm_unreachable("Unhandled IntrinsicKind");
+}
+
+/// The Zvvm/IME OFP8 vector type of the given format, element count, and NF.
+/// These share the unsigned char element type with vuint8, so they cannot be
+/// found through ASTContext::getScalableVectorType.
+static QualType getRVVOFP8VectorType(ASTContext &Context, bool IsE5M2,
+                                     unsigned NumElts, unsigned NumFields) {
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF,        \
+                             IsE5M2Ty)                                         \
+  if (IsE5M2 == IsE5M2Ty && NumElts == NumEls && NumFields == NF)              \
+    return Context.SingletonId;
+#include "clang/Basic/RISCVVTypes.def"
+  llvm_unreachable("Unhandled OFP8 vector type");
 }
 
 static QualType RVVType2Qual(ASTContext &Context, const RVVType *Type) {
@@ -140,6 +167,21 @@ static QualType RVVType2Qual(ASTContext &Context, const RVVType *Type) {
   case ScalarTypeKind::FloatE4M3:
   case ScalarTypeKind::FloatE5M2:
     QT = Context.getIntTypeForBitwidth(8, false);
+    break;
+  case ScalarTypeKind::OFP8E4M3:
+  case ScalarTypeKind::OFP8E5M2:
+    if (Type->isVector()) {
+      QT = getRVVOFP8VectorType(
+          Context, Type->getScalarType() == ScalarTypeKind::OFP8E5M2,
+          *Type->getScale(), Type->isTuple() ? Type->getNF() : 1);
+      if (Type->isConstant())
+        QT = Context.getConstType(QT);
+      if (Type->isPointer())
+        QT = Context.getPointerType(QT);
+      return QT;
+    }
+    // No OFP8 scalar C type: OFP8 scalars and pointees are uint8_t.
+    QT = Context.UnsignedCharTy;
     break;
   case ScalarTypeKind::BFloat:
     QT = Context.BFloat16Ty;
@@ -188,6 +230,7 @@ private:
   bool ConstructedRISCVVBuiltins;
   bool ConstructedRISCVSiFiveVectorBuiltins;
   bool ConstructedRISCVAndesVectorBuiltins;
+  bool ConstructedRISCVZvvmVectorBuiltins;
 
   // List of all RVV intrinsic.
   std::vector<RVVIntrinsicDef> IntrinsicList;
@@ -214,6 +257,7 @@ public:
     ConstructedRISCVVBuiltins = false;
     ConstructedRISCVSiFiveVectorBuiltins = false;
     ConstructedRISCVAndesVectorBuiltins = false;
+    ConstructedRISCVZvvmVectorBuiltins = false;
   }
 
   // Initialize IntrinsicList
@@ -356,6 +400,12 @@ void RISCVIntrinsicManagerImpl::InitIntrinsicList() {
     ConstructedRISCVAndesVectorBuiltins = true;
     ConstructRVVIntrinsics(RVAndesVectorIntrinsicRecords,
                            IntrinsicKind::ANDES_VECTOR);
+  }
+  if (S.RISCV().DeclareZvvmVectorBuiltins &&
+      !ConstructedRISCVZvvmVectorBuiltins) {
+    ConstructedRISCVZvvmVectorBuiltins = true;
+    ConstructRVVIntrinsics(RVZvvmVectorIntrinsicRecords,
+                           IntrinsicKind::ZVVM_VECTOR);
   }
 }
 
@@ -567,11 +617,19 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
     StringRef FeaturesStr = A->getFeaturesStr();
     llvm::SmallVector<StringRef> RequiredFeatures;
     FeaturesStr.split(RequiredFeatures, ',');
-    for (auto RF : RequiredFeatures)
-      if (!TI.hasFeature(RF) && !FunctionFeatureMap.lookup(RF))
+    for (auto RF : RequiredFeatures) {
+      // A term may list alternatives as "a|b|c"; any one of them suffices
+      // (the same syntax Builtin::evaluateRequiredTargetFeatures accepts).
+      llvm::SmallVector<StringRef> Alternatives;
+      RF.split(Alternatives, '|');
+      if (llvm::none_of(Alternatives, [&](StringRef Alt) {
+            return TI.hasFeature(Alt) || FunctionFeatureMap.lookup(Alt);
+          }))
         return Diag(TheCall->getBeginLoc(),
                     diag::err_riscv_builtin_requires_extension)
-               << /* IsExtension */ true << TheCall->getSourceRange() << RF;
+               << /* IsExtension */ true << TheCall->getSourceRange()
+               << llvm::join(Alternatives, ", ");
+    }
   }
 
   // vmulh.vv, vmulh.vx, vmulhu.vv, vmulhu.vx, vmulhsu.vv, vmulhsu.vx,
@@ -674,6 +732,25 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
   case RISCVVector::BI__builtin_rvv_sf_vsettk:
     return SemaRef.BuiltinConstantArgRange(TheCall, 1, 0, 3) ||
            SemaRef.BuiltinConstantArgRange(TheCall, 2, 1, 3);
+  case RISCVVector::BI__builtin_rvv_vsetlambda: {
+    // Spec: requested_lambda is a semantic lambda value in
+    // {0, 1, 2, 4, 8, 16, 32, 64}. 0 is the preserve-or-initialize request.
+    // A runtime (non-constant) argument is accepted; supplying an
+    // out-of-domain value at runtime is undefined behavior. A compile-time
+    // out-of-domain value is diagnosed here.
+    Expr *Arg = TheCall->getArg(0);
+    if (Arg->isTypeDependent() || Arg->isValueDependent())
+      return false;
+    std::optional<llvm::APSInt> Result =
+        Arg->getIntegerConstantExpr(SemaRef.Context);
+    if (!Result)
+      return false;
+    int64_t L = Result->getSExtValue();
+    if (L < 0 || L > 64 || (L != 0 && !llvm::isPowerOf2_64(L)))
+      return Diag(Arg->getBeginLoc(), diag::err_riscv_builtin_invalid_lambda)
+             << Arg->getSourceRange();
+    return false;
+  }
   case RISCVVector::BI__builtin_rvv_sf_mm_f_f_w1:
   case RISCVVector::BI__builtin_rvv_sf_mm_f_f_w2:
   case RISCVVector::BI__builtin_rvv_sf_mm_e5m2_e4m3_w4:
@@ -1524,6 +1601,17 @@ bool SemaRISCV::CheckBuiltinFunctionCall(const TargetInfo &TI,
   return false;
 }
 
+static bool isRVVOFP8Type(const BuiltinType *BT) {
+  switch (BT->getKind()) {
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF, IsE5M2) \
+  case BuiltinType::Id:                                                        \
+    return true;
+#include "clang/Basic/RISCVVTypes.def"
+  default:
+    return false;
+  }
+}
+
 void SemaRISCV::checkRVVTypeSupport(QualType Ty, SourceLocation Loc, Decl *D,
                                     const llvm::StringMap<bool> &FeatureMap) {
   ASTContext::BuiltinVectorTypeInfo Info =
@@ -1563,6 +1651,17 @@ void SemaRISCV::checkRVVTypeSupport(QualType Ty, SourceLocation Loc, Decl *D,
   else if (Info.ElementType->isSpecificBuiltinType(BuiltinType::Float) &&
            !FeatureMap.lookup("zve32f"))
     Diag(Loc, diag::err_riscv_type_requires_extension) << Ty << "zve32f";
+  // Zvvm/IME OFP8 vector types (an i8 container, so the integer rules above
+  // already applied): available with any extension that produces or consumes
+  // OFP8 vector data -- the Zvvfmm MAC family (implied by every OFP8 per-type
+  // and MX IME extension), the Zvvm tile loads/stores, or Zvfofp8min.
+  else if (isRVVOFP8Type(Ty->castAs<BuiltinType>()) &&
+           !FeatureMap.lookup("experimental-zvvfmm") &&
+           !FeatureMap.lookup("experimental-zvvmtls") &&
+           !FeatureMap.lookup("experimental-zvvmttls") &&
+           !FeatureMap.lookup("experimental-zvfofp8min"))
+    Diag(Loc, diag::err_riscv_type_requires_extension)
+        << Ty << "zvvfmm, zvvmtls, zvvmttls or zvfofp8min";
   // Given that caller already checked isRVVType() before calling this function,
   // if we don't have at least zve32x supported, then we need to emit error.
   else if (!FeatureMap.lookup("zve32x"))

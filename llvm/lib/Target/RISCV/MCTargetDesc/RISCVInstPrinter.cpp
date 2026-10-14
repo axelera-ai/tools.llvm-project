@@ -165,6 +165,36 @@ void RISCVInstPrinter::printFRMArg(const MCInst *MI, unsigned OpNo,
   O << ", " << RISCVFPRndMode::roundingModeToString(FRMArg);
 }
 
+// Zvvm microscaled MAC scale operand: prints ", v0.scale" when the operand
+// is V0 (vm=0). The operand is mandatory on the MX-only mnemonics and never
+// NoRegister there.
+void RISCVInstPrinter::printVScaleReg(const MCInst *MI, unsigned OpNo,
+                                      const MCSubtargetInfo &STI,
+                                      raw_ostream &O) {
+  const MCOperand &MO = MI->getOperand(OpNo);
+  assert(MO.isReg() && "printVScaleReg can only print register operands");
+  if (MO.getReg() == RISCV::NoRegister)
+    return;
+  O << ", ";
+  printRegName(O, MO.getReg());
+  O << ".scale";
+}
+
+void RISCVInstPrinter::printLambdaArg(const MCInst *MI, unsigned OpNo,
+                                      const MCSubtargetInfo &STI,
+                                      raw_ostream &O) {
+  // Zvvm tile lambda override. The 3-bit value encodes:
+  //   0 = use vtype.lambda (omitted from asm), 1=L1, 2=L2, 3=L4, 4=L8,
+  //   5=L16, 6=L32, 7=L64.
+  unsigned Val = MI->getOperand(OpNo).getImm();
+  if (Val == 0)
+    return;
+  static const char *const Names[8] = {nullptr,  "L1",  "L2",  "L4",
+                                       "L8",     "L16", "L32", "L64"};
+  assert(Val < 8 && "Invalid lambda encoding");
+  O << ", " << Names[Val];
+}
+
 void RISCVInstPrinter::printFRMArgLegacy(const MCInst *MI, unsigned OpNo,
                                          const MCSubtargetInfo &STI,
                                          raw_ostream &O) {
@@ -216,14 +246,20 @@ void RISCVInstPrinter::printVTypeI(const MCInst *MI, unsigned OpNo,
                                    const MCSubtargetInfo &STI, raw_ostream &O) {
   unsigned Imm = MI->getOperand(OpNo).getImm();
   // Print the raw immediate for reserved values: vlmul[2:0]=4, vsew[2:0]=0b1xx,
-  // altfmt=1 without zvfbfa or zvfofp8min extension, or non-zero in bits 9 and
-  // above.
+  // altfmt=1 without an extension that defines it (zvfbfa, zvfofp8min, or a
+  // Zvvm BF16-accumulator extension, which uses altfmt to select the BF16
+  // accumulator format), or non-zero in bits 9 and above.
   if (RISCVVType::getVLMUL(Imm) == RISCVVType::VLMUL::LMUL_RESERVED ||
       RISCVVType::getSEW(Imm) > 64 ||
       (RISCVVType::isAltFmt(Imm) &&
        !(STI.hasFeature(RISCV::FeatureStdExtZvfbfa) ||
          STI.hasFeature(RISCV::FeatureStdExtZvfofp8min) ||
-         STI.hasFeature(RISCV::FeatureVendorXSfvfbfexp16e))) ||
+         STI.hasFeature(RISCV::FeatureVendorXSfvfbfexp16e) ||
+         STI.hasFeature(RISCV::FeatureStdExtZvvbf16mm) ||
+         STI.hasFeature(RISCV::FeatureStdExtZvvofp8bf16mm) ||
+         STI.hasFeature(RISCV::FeatureStdExtZvvofp4bf16mm) ||
+         STI.hasFeature(RISCV::FeatureStdExtZvvxi8bf16mm) ||
+         STI.hasFeature(RISCV::FeatureStdExtZvvxi4bf16mm))) ||
       (Imm >> 9) != 0) {
     O << formatImm(Imm);
     return;

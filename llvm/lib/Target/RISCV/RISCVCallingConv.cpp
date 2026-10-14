@@ -318,6 +318,12 @@ static MCRegister allocateRVVReg(MVT ValVT, unsigned ValNo, CCState &State,
     return State.AllocateReg(ArgVRN4M2s);
   if (RC == &RISCV::VRN2M4RegClass)
     return State.AllocateReg(ArgVRN2M4s);
+  if (RC == &RISCV::VRN2M8RegClass)
+    // An IME (Zvvm) m16 accumulator tuple must be 16-register aligned, and
+    // no 16-aligned M8 pair lies within the v8-v23 argument registers. Per
+    // the IME spec's psABI caveat, m16 values are not passed in registers;
+    // returning no register selects the indirect path.
+    return MCRegister();
   llvm_unreachable("Unhandled register class for ValueType");
 }
 

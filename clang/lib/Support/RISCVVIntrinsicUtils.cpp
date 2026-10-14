@@ -112,9 +112,16 @@ bool RVVType::verifyType() const {
     return false;
   if (isBFloat() && ElementBitwidth != 16)
     return false;
+  // Zvvm/IME OFP8 vectors exist only at SEW=8, and the only tuple-shaped
+  // OFP8 type is the m16 accumulator (no segment tuples are defined).
+  if (isOFP8() && (ElementBitwidth != 8 || (IsTuple && !isIMEM16())))
+    return false;
   if (IsTuple && (NF == 1 || NF > 8))
     return false;
-  if (IsTuple && (1 << std::max(0, LMUL.Log2LMUL)) * NF > 8)
+  // Zvlsseg segment tuples require NF x LMUL <= 8. The single exception is
+  // the IME (Zvvm) m16 accumulator: a pair of M8 groups (NF=2, LMUL=8),
+  // spelled v<elt>m16_t rather than the segment-style m8x2 (see isIMEM16()).
+  if (IsTuple && (1 << std::max(0, LMUL.Log2LMUL)) * NF > 8 && !isIMEM16())
     return false;
   unsigned V = *Scale;
   switch (ElementBitwidth) {
@@ -208,6 +215,11 @@ void RVVType::initBuiltinStr() {
   case ScalarTypeKind::FloatE5M2:
     BuiltinStr += "b";
     break;
+  case ScalarTypeKind::OFP8E4M3:
+  case ScalarTypeKind::OFP8E5M2:
+    // No FP8 builtin-string element type: describe the i8 container.
+    BuiltinStr += "Uc";
+    break;
   default:
     llvm_unreachable("ScalarType is invalid!");
   }
@@ -246,6 +258,13 @@ void RVVType::initClangBuiltinStr() {
   case ScalarTypeKind::BFloat:
     ClangBuiltinStr += "bfloat";
     break;
+  case ScalarTypeKind::OFP8E4M3:
+  case ScalarTypeKind::OFP8E5M2:
+    // __rvv_float8e4m3m1_t: the element width is part of the format token.
+    ClangBuiltinStr +=
+        (ScalarType == ScalarTypeKind::OFP8E4M3 ? "float8e4m3" : "float8e5m2");
+    ClangBuiltinStr += (isIMEM16() ? "m16" : LMUL.str()) + "_t";
+    return;
   case ScalarTypeKind::SignedInteger:
     ClangBuiltinStr += "int";
     break;
@@ -257,8 +276,10 @@ void RVVType::initClangBuiltinStr() {
   default:
     llvm_unreachable("ScalarTypeKind is invalid");
   }
-  ClangBuiltinStr += utostr(ElementBitwidth) + LMUL.str() +
-                     (IsTuple ? "x" + utostr(NF) : "") + "_t";
+  ClangBuiltinStr += utostr(ElementBitwidth) +
+                     (isIMEM16() ? "m16"
+                                 : LMUL.str() + (IsTuple ? "x" + utostr(NF) : "")) +
+                     "_t";
 }
 
 void RVVType::initTypeStr() {
@@ -270,8 +291,10 @@ void RVVType::initTypeStr() {
   auto getTypeString = [&](StringRef TypeStr) {
     if (isScalar())
       return Twine(TypeStr + Twine(ElementBitwidth) + "_t").str();
-    return Twine("v" + TypeStr + Twine(ElementBitwidth) + LMUL.str() +
-                 (IsTuple ? "x" + utostr(NF) : "") + "_t")
+    return Twine("v" + TypeStr + Twine(ElementBitwidth) +
+                 (isIMEM16() ? "m16"
+                             : LMUL.str() + (IsTuple ? "x" + utostr(NF) : "")) +
+                 "_t")
         .str();
   };
 
@@ -323,6 +346,18 @@ void RVVType::initTypeStr() {
     } else
       Str += getTypeString("bfloat");
     break;
+  case ScalarTypeKind::OFP8E4M3:
+  case ScalarTypeKind::OFP8E5M2:
+    // No OFP8 scalar C type: scalars and pointers are uint8_t (as in the IME
+    // tile load/store signatures). Vectors are vfloat8e4m3mX_t etc.
+    if (isScalar())
+      Str += "uint8_t";
+    else
+      Str += std::string("v") +
+             (ScalarType == ScalarTypeKind::OFP8E4M3 ? "float8e4m3"
+                                                     : "float8e5m2") +
+             (isIMEM16() ? "m16" : LMUL.str()) + "_t";
+    break;
   case ScalarTypeKind::SignedInteger:
     Str += getTypeString("int");
     break;
@@ -357,13 +392,19 @@ void RVVType::initShortStr() {
     ShortStr = "u" + utostr(ElementBitwidth);
     break;
   case ScalarTypeKind::FloatE4M3:
+  case ScalarTypeKind::OFP8E4M3:
     ShortStr = "f8e4m3";
     break;
   case ScalarTypeKind::FloatE5M2:
+  case ScalarTypeKind::OFP8E5M2:
     ShortStr = "f8e5m2";
     break;
   default:
     llvm_unreachable("Unhandled case!");
+  }
+  if (isIMEM16()) {
+    ShortStr += "m16";
+    return;
   }
   if (isVector())
     ShortStr += LMUL.str();
@@ -418,6 +459,14 @@ void RVVType::applyBasicType() {
   case BasicType::F8E5M2:
     ElementBitwidth = 8;
     ScalarType = ScalarTypeKind::FloatE5M2;
+    break;
+  case BasicType::OFP8E4M3:
+    ElementBitwidth = 8;
+    ScalarType = ScalarTypeKind::OFP8E4M3;
+    break;
+  case BasicType::OFP8E5M2:
+    ElementBitwidth = 8;
+    ScalarType = ScalarTypeKind::OFP8E5M2;
     break;
   default:
     llvm_unreachable("Unhandled type code!");
@@ -540,6 +589,22 @@ PrototypeDescriptor::parsePrototypeDescriptor(
         break;
       default:
         llvm_unreachable("Invalid FixedSEW value, should be 8, 16, 32 or 64");
+        return std::nullopt;
+      }
+    } else if (ComplexTT.first == "ScalePair") {
+      uint32_t PairWidth;
+      if (ComplexTT.second.getAsInteger(10, PairWidth) || PairWidth != 16) {
+        llvm_unreachable("Invalid ScalePair value, must be 16 (E8M0 pairs)");
+        return std::nullopt;
+      }
+      VTM = VectorTypeModifier::ScalePairU16M1;
+    } else if (ComplexTT.first == "OFP8") {
+      if (ComplexTT.second == "E4M3")
+        VTM = VectorTypeModifier::OFP8E4M3;
+      else if (ComplexTT.second == "E5M2")
+        VTM = VectorTypeModifier::OFP8E5M2;
+      else {
+        llvm_unreachable("Invalid OFP8 format, should be E4M3 or E5M2");
         return std::nullopt;
       }
     } else if (ComplexTT.first == "LFixedLog2LMUL") {
@@ -779,6 +844,32 @@ void RVVType::applyModifier(const PrototypeDescriptor &Transformer) {
   case VectorTypeModifier::FixedSEW64:
     applyFixedSEW(64);
     break;
+  case VectorTypeModifier::ScalePairU16M1:
+    // Zvvm/IME paired E8M0 block scales: one m1 register of unsigned 16-bit
+    // (scale_A, scale_B) pairs, independent of the operand's base type.
+    ElementBitwidth = 16;
+    ScalarType = ScalarTypeKind::UnsignedInteger;
+    LMUL = LMULType(0);
+    Scale = LMUL.getScale(ElementBitwidth);
+    break;
+  case VectorTypeModifier::OFP8E4M3:
+  case VectorTypeModifier::OFP8E5M2: {
+    ScalarTypeKind NewKind =
+        static_cast<VectorTypeModifier>(Transformer.VTM) ==
+                VectorTypeModifier::OFP8E4M3
+            ? ScalarTypeKind::OFP8E4M3
+            : ScalarTypeKind::OFP8E5M2;
+    // Like FixedSEW, a no-op request is invalid so that one def over both
+    // OFP8 formats does not produce a same-type variant.
+    if (ScalarType == NewKind) {
+      ScalarType = ScalarTypeKind::Invalid;
+      return;
+    }
+    ElementBitwidth = 8;
+    ScalarType = NewKind;
+    Scale = LMUL.getScale(ElementBitwidth);
+    break;
+  }
   case VectorTypeModifier::LFixedLog2LMULN3:
     applyFixedLog2LMUL(-3, FixedLMULType::LargerThan);
     break;

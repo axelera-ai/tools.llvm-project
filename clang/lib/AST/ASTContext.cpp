@@ -4477,6 +4477,13 @@ ASTContext::getBuiltinVectorTypeInfo(const BuiltinType *Ty) const {
 #define RVV_VECTOR_TYPE_BFLOAT(Name, Id, SingletonId, NumEls, ElBits, NF)      \
   case BuiltinType::Id:                                                        \
     return {BFloat16Ty, llvm::ElementCount::getScalable(NumEls), NF};
+  // OFP8 vectors have no FP8 scalar type: their elements are carried in an i8
+  // container, so the element type is unsigned char (the IME C API uses
+  // uint8_t for OFP8 scalars and pointers).
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF,        \
+                             IsE5M2)                                           \
+  case BuiltinType::Id:                                                        \
+    return {UnsignedCharTy, llvm::ElementCount::getScalable(NumEls), NF};
 #define RVV_PREDICATE_TYPE(Name, Id, SingletonId, NumEls)                      \
   case BuiltinType::Id:                                                        \
     return {BoolTy, llvm::ElementCount::getScalable(NumEls), 1};
@@ -4551,6 +4558,10 @@ QualType ASTContext::getScalableVectorType(QualType EltTy, unsigned NumElts,
         IsBF && !IsFP)) &&                                                     \
       EltTySize == ElBits && NumElts == NumEls && NumFields == NF)             \
     return ScalableVecTyMap[K] = SingletonId;
+  // OFP8 vectors share the unsigned char element type with vuint8; an element
+  // type lookup always means the integer type. Sema builds OFP8 vector types
+  // from their BuiltinType kinds directly.
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF, IsE5M2)
 #define RVV_PREDICATE_TYPE(Name, Id, SingletonId, NumEls)                      \
   if (EltTy->isBooleanType() && NumElts == NumEls)                             \
     return ScalableVecTyMap[K] = SingletonId;

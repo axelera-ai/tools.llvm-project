@@ -74,6 +74,15 @@ using namespace RISCV;
 
 } // namespace llvm::RISCVVPseudosTable
 
+namespace llvm::RISCVMatrixPseudosTable {
+
+using namespace RISCV;
+
+#define GET_RISCVMatrixPseudosTable_IMPL
+#include "RISCVGenSearchableTables.inc"
+
+} // namespace llvm::RISCVMatrixPseudosTable
+
 namespace llvm::RISCV {
 
 #define GET_RISCVMaskedPseudosTable_IMPL
@@ -689,6 +698,8 @@ void RISCVInstrInfo::storeRegToStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVSPILL2_M2;
   else if (RISCV::VRN2M4RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL2_M4;
+  else if (RISCV::VRN2M8RegClass.hasSubClassEq(RC))
+    Opcode = RISCV::PseudoVSPILL2_M8;
   else if (RISCV::VRN3M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVSPILL3_M1;
   else if (RISCV::VRN3M2RegClass.hasSubClassEq(RC))
@@ -781,6 +792,8 @@ void RISCVInstrInfo::loadRegFromStackSlot(MachineBasicBlock &MBB,
     Opcode = RISCV::PseudoVRELOAD2_M2;
   else if (RISCV::VRN2M4RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVRELOAD2_M4;
+  else if (RISCV::VRN2M8RegClass.hasSubClassEq(RC))
+    Opcode = RISCV::PseudoVRELOAD2_M8;
   else if (RISCV::VRN3M1RegClass.hasSubClassEq(RC))
     Opcode = RISCV::PseudoVRELOAD3_M1;
   else if (RISCV::VRN3M2RegClass.hasSubClassEq(RC))
@@ -4951,6 +4964,9 @@ RISCV::isRVVSpillForZvlsseg(unsigned Opcode) {
   case RISCV::PseudoVSPILL2_M4:
   case RISCV::PseudoVRELOAD2_M4:
     return std::make_pair(2u, 4u);
+  case RISCV::PseudoVSPILL2_M8:
+  case RISCV::PseudoVRELOAD2_M8:
+    return std::make_pair(2u, 8u);
   case RISCV::PseudoVSPILL3_M1:
   case RISCV::PseudoVRELOAD3_M1:
     return std::make_pair(3u, 1u);

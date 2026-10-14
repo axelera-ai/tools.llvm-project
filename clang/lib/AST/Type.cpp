@@ -2664,6 +2664,12 @@ bool Type::isRVVVLSBuiltinType() const {
                         IsFP, IsBF)                                            \
   case BuiltinType::Id:                                                        \
     return NF == 1;
+  // No fixed-length (riscv_rvv_vector_bits) OFP8 types: their VLS form would
+  // be a GNU vector of unsigned char, indistinguishable from the vuint8 one,
+  // which would make OFP8 and uint8 vectors implicitly convertible.
+#define RVV_VECTOR_TYPE_OFP8(Name, Id, SingletonId, NumEls, ElBits, NF, IsE5M2) \
+  case BuiltinType::Id:                                                        \
+    return false;
 #define RVV_PREDICATE_TYPE(Name, Id, SingletonId, NumEls)                      \
   case BuiltinType::Id:                                                        \
     return true;

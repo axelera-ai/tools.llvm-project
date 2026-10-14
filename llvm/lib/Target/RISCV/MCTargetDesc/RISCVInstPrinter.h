@@ -42,6 +42,10 @@ public:
                    raw_ostream &O);
   void printFRMArgLegacy(const MCInst *MI, unsigned OpNo,
                          const MCSubtargetInfo &STI, raw_ostream &O);
+  void printLambdaArg(const MCInst *MI, unsigned OpNo,
+                      const MCSubtargetInfo &STI, raw_ostream &O);
+  void printVScaleReg(const MCInst *MI, unsigned OpNo,
+                      const MCSubtargetInfo &STI, raw_ostream &O);
   void printFPImmOperand(const MCInst *MI, unsigned OpNo,
                          const MCSubtargetInfo &STI, raw_ostream &O);
   void printZeroOffsetMemOp(const MCInst *MI, unsigned OpNo,
